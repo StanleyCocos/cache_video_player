@@ -14,16 +14,23 @@ import io.flutter.FlutterInjector;
 import io.flutter.Log;
 import io.flutter.embedding.engine.plugins.FlutterPlugin;
 import io.flutter.plugin.common.BinaryMessenger;
+import io.flutter.plugin.common.MethodCall;
+import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugins.videoplayer.platformview.PlatformVideoViewFactory;
 import io.flutter.plugins.videoplayer.platformview.PlatformViewVideoPlayer;
 import io.flutter.plugins.videoplayer.texture.TextureVideoPlayer;
 import io.flutter.view.TextureRegistry;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 
 /** Android platform implementation of the VideoPlayerPlugin. */
 public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
   private static final String TAG = "VideoPlayerPlugin";
+  private static final String PRELOAD_CHANNEL = "duyo/video_preload_cache";
   private final LongSparseArray<VideoPlayer> videoPlayers = new LongSparseArray<>();
   private FlutterState flutterState;
+  private MethodChannel preloadChannel;
   private final VideoPlayerOptions sharedOptions = new VideoPlayerOptions();
   private long nextPlayerIdentifier = 1;
 
@@ -41,6 +48,8 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
             injector.flutterLoader()::getLookupKeyForAsset,
             binding.getTextureRegistry());
     flutterState.startListening(this, binding.getBinaryMessenger());
+    preloadChannel = new MethodChannel(binding.getBinaryMessenger(), PRELOAD_CHANNEL);
+    preloadChannel.setMethodCallHandler(this::handlePreloadMethod);
 
     binding
         .getPlatformViewRegistry()
@@ -55,6 +64,10 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
       Log.wtf(TAG, "Detached from the engine before registering to it.");
     }
     flutterState.stopListening(binding.getBinaryMessenger());
+    if (preloadChannel != null) {
+      preloadChannel.setMethodCallHandler(null);
+      preloadChannel = null;
+    }
     flutterState = null;
     onDestroy();
   }
@@ -86,13 +99,16 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
     final VideoAsset videoAsset = videoAssetWithOptions(options);
 
     long id = nextPlayerIdentifier++;
+    VideoLoadTrace.start(id);
+    VideoPreloadCache.logHitBeforePlay(flutterState.applicationContext, id, options.getUri());
     final String streamInstance = Long.toString(id);
     VideoPlayer videoPlayer =
         PlatformViewVideoPlayer.create(
             flutterState.applicationContext,
             VideoPlayerEventCallbacks.bindTo(flutterState.binaryMessenger, streamInstance),
             videoAsset,
-            sharedOptions);
+            sharedOptions,
+            id);
 
     registerPlayerInstance(videoPlayer, id);
     return id;
@@ -104,6 +120,8 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
     final VideoAsset videoAsset = videoAssetWithOptions(options);
 
     long id = nextPlayerIdentifier++;
+    VideoLoadTrace.start(id);
+    VideoPreloadCache.logHitBeforePlay(flutterState.applicationContext, id, options.getUri());
     final String streamInstance = Long.toString(id);
     TextureRegistry.SurfaceProducer handle = flutterState.textureRegistry.createSurfaceProducer();
     VideoPlayer videoPlayer =
@@ -112,7 +130,8 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
             VideoPlayerEventCallbacks.bindTo(flutterState.binaryMessenger, streamInstance),
             handle,
             videoAsset,
-            sharedOptions);
+            sharedOptions,
+            id);
 
     registerPlayerInstance(videoPlayer, id);
     return new TexturePlayerIds(id, handle.id());
@@ -178,6 +197,7 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
     VideoPlayer player = getPlayer(playerId);
     player.dispose();
     videoPlayers.remove(playerId);
+    VideoLoadTrace.end(playerId);
   }
 
   @Override
@@ -190,6 +210,60 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
     return packageName == null
         ? flutterState.keyForAsset.get(asset)
         : flutterState.keyForAssetAndPackageName.get(asset, packageName);
+  }
+
+  private void handlePreloadMethod(@NonNull MethodCall call, @NonNull MethodChannel.Result result) {
+    if (flutterState == null) {
+      result.error("not_attached", "Video player plugin is not attached.", null);
+      return;
+    }
+    switch (call.method) {
+      case "preload":
+        VideoPreloadCache.preload(
+            flutterState.applicationContext,
+            call.argument("url"),
+            Collections.emptyMap(),
+            null);
+        result.success(null);
+        break;
+      case "syncQueue":
+        List<String> urls = call.argument("urls");
+        Map<String, String> titlesByUrl = call.argument("titlesByUrl");
+        VideoPreloadCache.syncQueue(
+            flutterState.applicationContext,
+            urls == null ? Collections.emptyList() : urls,
+            titlesByUrl == null ? Collections.emptyMap() : titlesByUrl,
+            Collections.emptyMap(),
+            null);
+        result.success(null);
+        break;
+      case "prioritize":
+        VideoPreloadCache.prioritize(
+            flutterState.applicationContext,
+            call.argument("url"),
+            call.argument("title"),
+            Collections.emptyMap(),
+            null);
+        result.success(null);
+        break;
+      case "clearQueue":
+        String clearReason = call.argument("reason");
+        VideoPreloadCache.clear(clearReason == null ? "clear" : clearReason);
+        result.success(null);
+        break;
+      case "cancelPreload":
+        String reason = call.argument("reason");
+        VideoPreloadCache.cancel(reason == null ? "cancel" : reason);
+        result.success(null);
+        break;
+      case "cachedBytes":
+        long bytes = VideoPreloadCache.cachedBytes(flutterState.applicationContext, call.argument("url"));
+        result.success(bytes > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) bytes);
+        break;
+      default:
+        result.notImplemented();
+        break;
+    }
   }
 
   private interface KeyForAssetFn {

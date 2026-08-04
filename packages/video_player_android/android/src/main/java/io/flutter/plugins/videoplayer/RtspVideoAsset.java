@@ -27,7 +27,7 @@ final class RtspVideoAsset extends VideoAsset {
   @OptIn(markerClass = UnstableApi.class)
   @Override
   @NonNull
-  public MediaSource.Factory getMediaSourceFactory(@NonNull Context context) {
+  public MediaSource.Factory getMediaSourceFactory(@NonNull Context context, long playerId) {
     return new RtspMediaSource.Factory();
   }
 }
