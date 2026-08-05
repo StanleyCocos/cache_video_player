@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import CryptoKit
 import Foundation
 
 /// Duyo 视频预加载磁盘缓存。
@@ -12,6 +13,7 @@ final class DuyoVideoPreloadCache {
   private static let effectiveBytes: Int64 = 524_288
   private static let partialBytes: Int64 = 786_432
   private static let maxActivePreloads = 2
+  private static let maxCacheBytes: Int64 = 200 * 1_024 * 1_024
 
   private let lockQueue = DispatchQueue(label: "duyo.video.preload.cache")
   private let fileManager = FileManager.default
@@ -131,9 +133,11 @@ final class DuyoVideoPreloadCache {
     if let data {
       do {
         try data.write(to: cacheFile(url: url), options: .atomic)
+        touchCacheFile(url: url)
       } catch {
         logPreloadError(url: url, error: error)
       }
+      trimCacheLocked(protectedUrl: url)
     }
     startNext()
   }
@@ -150,11 +154,16 @@ final class DuyoVideoPreloadCache {
     guard let size = try? fileManager.attributesOfItem(atPath: fileUrl.path)[.size] as? NSNumber else {
       return 0
     }
+    touchCacheFile(url: url)
     return min(size.int64Value, Self.preloadBytes)
   }
 
   private func cacheFile(url: String) -> URL {
-    cacheDirectory.appendingPathComponent("\(abs(url.hashValue)).bin")
+    cacheDirectory.appendingPathComponent("\(cacheKey(url: url)).bin")
+  }
+
+  private func cacheKey(url: String) -> String {
+    SHA256.hash(data: Data(url.utf8)).map { String(format: "%02x", $0) }.joined()
   }
 
   private func sanitize(_ url: String?) -> String? {
@@ -181,10 +190,69 @@ final class DuyoVideoPreloadCache {
     return result
   }
 
-  private func logPreloadError(url: String, error: Error) {
-    NSLog(
-      "[VideoPreloadCache] preload.error error=\(type(of: error)) cachedBytesAfter=\(cachedBytesLocked(url: url)) urlHash=\(abs(url.hashValue))"
+  private func touchCacheFile(url: String) {
+    try? fileManager.setAttributes(
+      [.modificationDate: Date()],
+      ofItemAtPath: cacheFile(url: url).path
     )
   }
 
+  private func trimCacheLocked(protectedUrl: String) {
+    let files = cacheFiles()
+    let totalBytes = files.reduce(Int64(0)) { partialResult, file in
+      partialResult + file.size
+    }
+    guard totalBytes > Self.maxCacheBytes else {
+      return
+    }
+
+    var remainingBytes = totalBytes
+    let protectedPath = cacheFile(url: protectedUrl).path
+    let removableFiles = files
+      .filter { $0.url.path != protectedPath }
+      .sorted { left, right in
+        left.modifiedAt < right.modifiedAt
+      }
+
+    for file in removableFiles {
+      if remainingBytes <= Self.maxCacheBytes {
+        break
+      }
+      try? fileManager.removeItem(at: file.url)
+      remainingBytes -= file.size
+    }
+  }
+
+  private func cacheFiles() -> [CacheFile] {
+    guard let urls = try? fileManager.contentsOfDirectory(
+      at: cacheDirectory,
+      includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+      options: [.skipsHiddenFiles]
+    ) else {
+      return []
+    }
+
+    return urls.compactMap { url in
+      guard url.pathExtension == "bin",
+            let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+            let size = attributes[.size] as? NSNumber else {
+        return nil
+      }
+      let modifiedAt = attributes[.modificationDate] as? Date ?? .distantPast
+      return CacheFile(url: url, size: size.int64Value, modifiedAt: modifiedAt)
+    }
+  }
+
+  private func logPreloadError(url: String, error: Error) {
+    NSLog(
+      "[VideoPreloadCache] preload.error error=\(type(of: error)) cachedBytesAfter=\(cachedBytesLocked(url: url)) urlHash=\(cacheKey(url: url))"
+    )
+  }
+
+}
+
+private struct CacheFile {
+  let url: URL
+  let size: Int64
+  let modifiedAt: Date
 }
