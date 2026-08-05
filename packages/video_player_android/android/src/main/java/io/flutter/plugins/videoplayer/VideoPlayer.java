@@ -75,6 +75,7 @@ public abstract class VideoPlayer implements VideoPlayerInstanceApi {
       trackSelector = (DefaultTrackSelector) exoPlayer.getTrackSelector();
     }
 
+    VideoLoadDebugLog.write("VideoPlayer", "prepare playerId=" + playerId);
     exoPlayer.setMediaItem(mediaItem);
     exoPlayer.prepare();
     exoPlayer.addListener(createExoPlayerEventListener(exoPlayer, surfaceProducer));
@@ -97,11 +98,13 @@ public abstract class VideoPlayer implements VideoPlayerInstanceApi {
 
   @Override
   public void play() {
+    VideoLoadDebugLog.write("VideoPlayer", "play");
     exoPlayer.play();
   }
 
   @Override
   public void pause() {
+    VideoLoadDebugLog.write("VideoPlayer", "pause");
     exoPlayer.pause();
   }
 
@@ -137,6 +140,7 @@ public abstract class VideoPlayer implements VideoPlayerInstanceApi {
 
   @Override
   public void seekTo(long position) {
+    VideoLoadDebugLog.write("VideoPlayer", "seekTo position=" + position);
     exoPlayer.seekTo(position);
   }
 
@@ -236,6 +240,7 @@ public abstract class VideoPlayer implements VideoPlayerInstanceApi {
   }
 
   public void dispose() {
+    VideoLoadDebugLog.write("VideoPlayer", "dispose");
     if (disposeHandler != null) {
       disposeHandler.onDispose();
     }

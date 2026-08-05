@@ -21,6 +21,17 @@ static void *rateContext = &rateContext;
 /// https://developer.apple.com/documentation/avfoundation/avpartialasyncproperty/variants
 static NSString *const kFVPAssetVariantsKey = @"variants";
 
+static BOOL FVPVideoLoadLogEnabled(void) {
+  return [[NSUserDefaults standardUserDefaults] boolForKey:@"duyo_video_load_log_enabled"];
+}
+
+static void FVPVideoLoadLog(NSString *message) {
+  if (!FVPVideoLoadLogEnabled()) {
+    return;
+  }
+  NSLog(@"[DuyoVideoLoad][FVPVideoPlayer] %@", message);
+}
+
 /// Registers KVO observers on 'object' for each entry in 'observations', which must be a
 /// dictionary mapping KVO keys to NSValue-wrapped context pointers.
 ///
@@ -159,6 +170,7 @@ static NSDictionary<NSString *, NSValue *> *FVPGetPlayerItemObservations(void) {
   _pixelBufferSource = [avFactory videoOutputWithOutputSettings:outputSettings];
 
   [asset loadValuesAsynchronouslyForKeys:@[ @"tracks" ] completionHandler:assetCompletionHandler];
+  FVPVideoLoadLog(@"init player");
 
   return self;
 }
@@ -177,6 +189,7 @@ static NSDictionary<NSString *, NSValue *> *FVPGetPlayerItemObservations(void) {
     return;
   }
   _disposed = YES;
+  FVPVideoLoadLog(@"dispose");
 
   if (_listenersRegistered) {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
@@ -410,11 +423,13 @@ NS_INLINE CGFloat radiansToDegrees(CGFloat radians) {
 #pragma mark - FVPVideoPlayerInstanceApi
 
 - (void)playWithError:(FlutterError *_Nullable *_Nonnull)error {
+  FVPVideoLoadLog(@"play");
   _isPlaying = YES;
   [self updatePlayingState];
 }
 
 - (void)pauseWithError:(FlutterError *_Nullable *_Nonnull)error {
+  FVPVideoLoadLog(@"pause");
   _isPlaying = NO;
   [self updatePlayingState];
 }
@@ -424,6 +439,7 @@ NS_INLINE CGFloat radiansToDegrees(CGFloat radians) {
 }
 
 - (void)seekTo:(NSInteger)position completion:(void (^)(FlutterError *_Nullable))completion {
+  FVPVideoLoadLog([NSString stringWithFormat:@"seekTo position=%ld", (long)position]);
   CMTime targetCMTime = CMTimeMake(position, 1000);
   CMTimeValue duration = _player.currentItem.asset.duration.value;
   // Without adding tolerance when seeking to duration,
