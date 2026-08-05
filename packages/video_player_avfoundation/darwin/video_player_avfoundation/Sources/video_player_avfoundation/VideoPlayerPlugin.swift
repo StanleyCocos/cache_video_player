@@ -175,6 +175,10 @@ public final class VideoPlayerPlugin: NSObject, FlutterPlugin, AVFoundationVideo
   func createPlatformViewPlayer(options params: CreationOptions) throws -> Int64 {
     let item = try playerItem(with: params)
     let player = FVPVideoPlayer(playerItem: item, avFactory: avFactory, viewProvider: viewProvider)
+    DuyoVideoLoadDebugLog.write(
+      "VideoPlayerPlugin",
+      "\(DuyoVideoPreloadCache.shared.titleLabel(url: params.uri))創建播放器 type=platformView playbackSource=originUrl urlHash=\(DuyoVideoLoadDebugLog.urlHash(params.uri))"
+    )
     return configurePlayer(player, extraDisposeHandler: nil)
   }
 
@@ -191,6 +195,10 @@ public final class VideoPlayerPlugin: NSObject, FlutterPlugin, AVFoundationVideo
       displayLink: displayLink,
       avFactory: avFactory,
       viewProvider: viewProvider
+    )
+    DuyoVideoLoadDebugLog.write(
+      "VideoPlayerPlugin",
+      "\(DuyoVideoPreloadCache.shared.titleLabel(url: creationOptions.uri))創建播放器 type=texture playbackSource=originUrl urlHash=\(DuyoVideoLoadDebugLog.urlHash(creationOptions.uri))"
     )
 
     let textureId = textureRegistry.register(player)
@@ -266,6 +274,7 @@ public final class VideoPlayerPlugin: NSObject, FlutterPlugin, AVFoundationVideo
       guard let strongSelf = self else { return }
       SetUpFVPVideoPlayerInstanceApiWithSuffix(strongSelf.binaryMessenger, nil, channelSuffix)
       extraDisposeHandler?()
+      DuyoVideoLoadDebugLog.write("VideoPlayerPlugin", "dispose playerId=\(playerId)")
       strongSelf.playersByIdentifier.removeValue(forKey: playerId)
     }
 
@@ -295,6 +304,9 @@ public final class VideoPlayerPlugin: NSObject, FlutterPlugin, AVFoundationVideo
   ) {
     let arguments = call.arguments as? [String: Any] ?? [:]
     switch call.method {
+    case "setLogEnabled":
+      DuyoVideoLoadDebugLog.setEnabled(arguments["enabled"] as? Bool ?? false)
+      result(nil)
     case "preload":
       DuyoVideoPreloadCache.shared.preload(
         url: arguments["url"] as? String,
