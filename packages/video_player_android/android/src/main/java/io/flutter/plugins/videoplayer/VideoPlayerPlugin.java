@@ -11,7 +11,6 @@ import androidx.annotation.Nullable;
 import androidx.annotation.OptIn;
 import androidx.media3.common.util.UnstableApi;
 import io.flutter.FlutterInjector;
-import io.flutter.Log;
 import io.flutter.embedding.engine.plugins.FlutterPlugin;
 import io.flutter.plugin.common.BinaryMessenger;
 import io.flutter.plugin.common.MethodCall;
@@ -26,7 +25,6 @@ import java.util.Map;
 
 /** Android platform implementation of the VideoPlayerPlugin. */
 public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
-  private static final String TAG = "VideoPlayerPlugin";
   private static final String PRELOAD_CHANNEL = "duyo/video_preload_cache";
   private final LongSparseArray<VideoPlayer> videoPlayers = new LongSparseArray<>();
   private FlutterState flutterState;
@@ -61,7 +59,7 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
   @Override
   public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
     if (flutterState == null) {
-      Log.wtf(TAG, "Detached from the engine before registering to it.");
+      return;
     }
     flutterState.stopListening(binding.getBinaryMessenger());
     if (preloadChannel != null) {
@@ -99,8 +97,6 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
     final VideoAsset videoAsset = videoAssetWithOptions(options);
 
     long id = nextPlayerIdentifier++;
-    VideoLoadTrace.start(id);
-    VideoPreloadCache.logHitBeforePlay(flutterState.applicationContext, id, options.getUri());
     final String streamInstance = Long.toString(id);
     VideoPlayer videoPlayer =
         PlatformViewVideoPlayer.create(
@@ -120,8 +116,6 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
     final VideoAsset videoAsset = videoAssetWithOptions(options);
 
     long id = nextPlayerIdentifier++;
-    VideoLoadTrace.start(id);
-    VideoPreloadCache.logHitBeforePlay(flutterState.applicationContext, id, options.getUri());
     final String streamInstance = Long.toString(id);
     TextureRegistry.SurfaceProducer handle = flutterState.textureRegistry.createSurfaceProducer();
     VideoPlayer videoPlayer =
@@ -197,7 +191,6 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
     VideoPlayer player = getPlayer(playerId);
     player.dispose();
     videoPlayers.remove(playerId);
-    VideoLoadTrace.end(playerId);
   }
 
   @Override

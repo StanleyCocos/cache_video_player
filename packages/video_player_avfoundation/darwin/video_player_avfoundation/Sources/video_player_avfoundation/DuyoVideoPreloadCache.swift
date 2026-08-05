@@ -16,11 +16,8 @@ final class DuyoVideoPreloadCache {
   private let lockQueue = DispatchQueue(label: "duyo.video.preload.cache")
   private let fileManager = FileManager.default
   private let cacheDirectory: URL
-  private var titlesByUrl: [String: String] = [:]
   private var queuedUrls: [String] = []
   private var activeTasks: [String: URLSessionDataTask] = [:]
-  private var activeStartMs: [String: Int64] = [:]
-  private var generation = 0
 
   private init() {
     let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
@@ -30,24 +27,19 @@ final class DuyoVideoPreloadCache {
   }
 
   /// 预加载单个视频。
-  func preload(url: String?, title: String? = nil) {
+  func preload(url: String?, title _: String? = nil) {
     guard let videoUrl = sanitize(url) else {
       return
     }
-    syncQueue(urls: [videoUrl], titlesByUrl: [videoUrl: title ?? ""])
+    syncQueue(urls: [videoUrl], titlesByUrl: [:])
   }
 
   /// 同步当前可见视频预加载队列。
-  func syncQueue(urls: [String], titlesByUrl incomingTitlesByUrl: [String: String]) {
+  func syncQueue(urls: [String], titlesByUrl _: [String: String]) {
     let visibleUrls = sanitize(urls)
     lockQueue.async {
-      self.syncTitles(visibleUrls: visibleUrls, incomingTitlesByUrl: incomingTitlesByUrl)
       self.queuedUrls.removeAll { url in
-        let removed = !visibleUrls.contains(url)
-        if removed {
-          self.log("preload.queue.remove", "\(self.videoLabel(url))離開隊列 原因=离屏 \(self.urlFields(url))")
-        }
-        return removed
+        !visibleUrls.contains(url)
       }
       for activeUrl in Array(self.activeTasks.keys) where !visibleUrls.contains(activeUrl) {
         self.cancelActive(url: activeUrl, reason: "离屏")
@@ -55,38 +47,24 @@ final class DuyoVideoPreloadCache {
       for visibleUrl in visibleUrls {
         let cachedBytes = self.cachedBytesLocked(url: visibleUrl)
         if cachedBytes >= Self.preloadBytes {
-          self.log(
-            "preload.queue.skipCached",
-            "\(self.videoLabel(visibleUrl))已緩存 已缓存字节=\(cachedBytes) \(self.urlFields(visibleUrl))"
-          )
           continue
         }
         if self.activeTasks[visibleUrl] != nil || self.queuedUrls.contains(visibleUrl) {
           continue
         }
         self.queuedUrls.append(visibleUrl)
-        self.log("preload.queue.add", "\(self.videoLabel(visibleUrl))進入隊列 \(self.urlFields(visibleUrl))")
       }
-      self.log(
-        "preload.queue.sync",
-        "可见视频数=\(visibleUrls.count) 等待数=\(self.queuedUrls.count) active数=\(self.activeTasks.count) active队列=\(self.shortLabels(Array(self.activeTasks.keys))) 可见视频=\(self.shortLabels(visibleUrls)) 等待队列=\(self.shortLabels(self.queuedUrls))"
-      )
       self.startNext()
     }
   }
 
   /// 点击视频时给未有效命中的当前视频让路。
-  func prioritize(url: String?, title: String?) {
+  func prioritize(url: String?, title _: String?) {
     guard let videoUrl = sanitize(url) else {
       return
     }
     lockQueue.async {
-      self.putTitle(url: videoUrl, title: title)
       let cachedBytes = self.cachedBytesLocked(url: videoUrl)
-      self.log(
-        "preload.queue.prioritize",
-        "\(self.videoLabel(videoUrl))被點擊 effectiveHit=\(cachedBytes >= Self.effectiveBytes) 已缓存字节=\(cachedBytes) \(self.urlFields(videoUrl))"
-      )
       if cachedBytes >= Self.effectiveBytes {
         return
       }
@@ -127,24 +105,13 @@ final class DuyoVideoPreloadCache {
       let nextUrl = queuedUrls.removeFirst()
       let cachedBytes = cachedBytesLocked(url: nextUrl)
       if cachedBytes >= Self.preloadBytes {
-        log(
-          "preload.queue.skipCached",
-          "\(videoLabel(nextUrl))已緩存 已缓存字节=\(cachedBytes) \(urlFields(nextUrl))"
-        )
         continue
       }
-      generation += 1
-      let currentGeneration = generation
-      activeStartMs[nextUrl] = nowMs()
-      log(
-        "preload.start",
-        "generation=\(currentGeneration) \(videoLabel(nextUrl))開始緩存 range=bytes=0-1048575 已缓存字节=\(cachedBytes) \(urlFields(nextUrl))"
-      )
       var request = URLRequest(url: URL(string: nextUrl)!)
       request.setValue("bytes=0-\(Self.preloadBytes - 1)", forHTTPHeaderField: "Range")
       let task = URLSession.shared.dataTask(with: request) { data, _, error in
         self.lockQueue.async {
-          self.finish(url: nextUrl, generation: currentGeneration, data: data, error: error)
+          self.finish(url: nextUrl, data: data, error: error)
         }
       }
       activeTasks[nextUrl] = task
@@ -152,36 +119,30 @@ final class DuyoVideoPreloadCache {
     }
   }
 
-  private func finish(url: String, generation: Int, data: Data?, error: Error?) {
+  private func finish(url: String, data: Data?, error: Error?) {
     activeTasks.removeValue(forKey: url)
-    let startMs = activeStartMs.removeValue(forKey: url) ?? nowMs()
     if let error {
-      let cachedBytes = cachedBytesLocked(url: url)
-      log(
-        "preload.error",
-        "generation=\(generation) \(videoLabel(url))緩存失敗 error=\(type(of: error)) cachedBytesAfter=\(cachedBytes) \(urlFields(url))"
-      )
+      if (error as? URLError)?.code != .cancelled {
+        logPreloadError(url: url, error: error)
+      }
       startNext()
       return
     }
     if let data {
-      try? data.write(to: cacheFile(url: url), options: .atomic)
+      do {
+        try data.write(to: cacheFile(url: url), options: .atomic)
+      } catch {
+        logPreloadError(url: url, error: error)
+      }
     }
-    let cachedBytes = cachedBytesLocked(url: url)
-    log(
-      "preload.end",
-      "generation=\(generation) \(videoLabel(url))緩存完成 effectiveHit=\(cachedBytes >= Self.effectiveBytes) bytes=\(min(cachedBytes, Self.preloadBytes)) cachedBytesAfter=\(cachedBytes) durationMs=\(nowMs() - startMs) \(urlFields(url))"
-    )
     startNext()
   }
 
-  private func cancelActive(url: String, reason: String) {
+  private func cancelActive(url: String, reason _: String) {
     guard let task = activeTasks.removeValue(forKey: url) else {
       return
     }
     task.cancel()
-    activeStartMs.removeValue(forKey: url)
-    log("preload.cancel", "\(videoLabel(url))緩存取消 原因=\(readableReason(reason)) \(urlFields(url))")
   }
 
   private func cachedBytesLocked(url: String) -> Int64 {
@@ -194,55 +155,6 @@ final class DuyoVideoPreloadCache {
 
   private func cacheFile(url: String) -> URL {
     cacheDirectory.appendingPathComponent("\(abs(url.hashValue)).bin")
-  }
-
-  private func syncTitles(visibleUrls: [String], incomingTitlesByUrl: [String: String]) {
-    titlesByUrl = titlesByUrl.filter { url, _ in
-      visibleUrls.contains(url) || queuedUrls.contains(url) || activeTasks[url] != nil
-    }
-    for url in visibleUrls {
-      putTitle(url: url, title: incomingTitlesByUrl[url])
-    }
-  }
-
-  private func putTitle(url: String, title: String?) {
-    let cleanTitle = (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-    if !cleanTitle.isEmpty {
-      titlesByUrl[url] = cleanTitle
-    }
-  }
-
-  private func videoLabel(_ url: String) -> String {
-    let title = titlesByUrl[url]?.isEmpty == false ? titlesByUrl[url]! : shortPath(url)
-    return "《\(title)》的視頻"
-  }
-
-  private func shortLabels(_ urls: [String]) -> String {
-    "[" + urls.map { "\(videoLabel($0)):\(shortPath($0))" }.joined(separator: ",") + "]"
-  }
-
-  private func shortPath(_ url: String) -> String {
-    URL(string: url)?.path ?? url
-  }
-
-  private func urlFields(_ url: String) -> String {
-    guard let components = URLComponents(string: url) else {
-      return "urlLength=\(url.count) urlHash=\(abs(url.hashValue))"
-    }
-    return "urlLength=\(url.count) urlHash=\(abs(url.hashValue)) scheme=\(components.scheme ?? "") host=\(components.host ?? "") path=\(components.path)"
-  }
-
-  private func readableReason(_ reason: String) -> String {
-    switch reason {
-    case "dispose":
-      return "销毁"
-    case "emptyVisible":
-      return "无可见视频"
-    case "clear":
-      return "清空"
-    default:
-      return reason
-    }
   }
 
   private func sanitize(_ url: String?) -> String? {
@@ -269,11 +181,10 @@ final class DuyoVideoPreloadCache {
     return result
   }
 
-  private func nowMs() -> Int64 {
-    Int64(Date().timeIntervalSince1970 * 1000)
+  private func logPreloadError(url: String, error: Error) {
+    NSLog(
+      "[VideoPreloadCache] preload.error error=\(type(of: error)) cachedBytesAfter=\(cachedBytesLocked(url: url)) urlHash=\(abs(url.hashValue))"
+    )
   }
 
-  private func log(_ event: String, _ fields: String) {
-    NSLog("VideoLoadTrace event=\(event) \(fields)")
-  }
 }

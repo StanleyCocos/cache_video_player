@@ -20,12 +20,8 @@ import androidx.media3.common.TrackSelectionOverride;
 import androidx.media3.common.Tracks;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.ExoPlayer;
-import androidx.media3.exoplayer.analytics.AnalyticsListener;
-import androidx.media3.exoplayer.source.LoadEventInfo;
-import androidx.media3.exoplayer.source.MediaLoadData;
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
 import io.flutter.view.TextureRegistry.SurfaceProducer;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -39,7 +35,6 @@ public abstract class VideoPlayer implements VideoPlayerInstanceApi {
   @Nullable protected final SurfaceProducer surfaceProducer;
   @Nullable private DisposeHandler disposeHandler;
   @NonNull protected ExoPlayer exoPlayer;
-  @NonNull private final VideoLoadTrace trace;
   // TODO: Migrate to stable API, see https://github.com/flutter/flutter/issues/147039.
   @UnstableApi @Nullable protected DefaultTrackSelector trackSelector;
 
@@ -73,9 +68,7 @@ public abstract class VideoPlayer implements VideoPlayerInstanceApi {
       @NonNull ExoPlayerProvider exoPlayerProvider) {
     this.videoPlayerEvents = events;
     this.surfaceProducer = surfaceProducer;
-    this.trace = new VideoLoadTrace(playerId);
     exoPlayer = exoPlayerProvider.get();
-    exoPlayer.addAnalyticsListener(createAnalyticsListener());
 
     // Try to get the track selector from the ExoPlayer if it was built with one
     if (exoPlayer.getTrackSelector() instanceof DefaultTrackSelector) {
@@ -247,50 +240,5 @@ public abstract class VideoPlayer implements VideoPlayerInstanceApi {
       disposeHandler.onDispose();
     }
     exoPlayer.release();
-  }
-
-  /** 创建 Media3 诊断监听器。 */
-  @NonNull
-  private AnalyticsListener createAnalyticsListener() {
-    return new AnalyticsListener() {
-      @Override
-      public void onLoadError(
-          @NonNull EventTime eventTime,
-          @NonNull LoadEventInfo loadEventInfo,
-          @NonNull MediaLoadData mediaLoadData,
-          @NonNull IOException error,
-          boolean wasCanceled) {
-        trace.log(
-            "native.load.error",
-            "taskId="
-                + loadEventInfo.loadTaskId
-                + " durationMs="
-                + loadEventInfo.loadDurationMs
-                + " bytes="
-                + loadEventInfo.bytesLoaded
-                + " canceled="
-                + wasCanceled
-                + " error="
-                + error.getClass().getSimpleName()
-                + ":"
-                + error.getMessage());
-      }
-
-      @Override
-      public void onPlayerError(
-          @NonNull EventTime eventTime, @NonNull androidx.media3.common.PlaybackException error) {
-        trace.log(
-            "native.player.error",
-            "code=" + error.errorCode + " name=" + error.getErrorCodeName() + " message=" + error.getMessage());
-      }
-
-      @Override
-      public void onDroppedVideoFrames(
-          @NonNull EventTime eventTime, int droppedFrames, long elapsedMs) {
-        if (droppedFrames >= 30) {
-          trace.log("native.droppedFrames", "count=" + droppedFrames + " elapsedMs=" + elapsedMs);
-        }
-      }
-    };
   }
 }

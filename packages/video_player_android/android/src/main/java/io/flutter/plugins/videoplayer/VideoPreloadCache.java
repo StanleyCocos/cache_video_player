@@ -1,6 +1,7 @@
 package io.flutter.plugins.videoplayer;
 
 import android.content.Context;
+import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.OptIn;
@@ -19,7 +20,6 @@ import androidx.media3.datasource.cache.SimpleCache;
 import java.io.File;
 import java.io.IOException;
 import java.io.InterruptedIOException;
-import java.net.URI;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -31,6 +31,7 @@ import java.util.concurrent.Executors;
 /** 视频预加载磁盘缓存。 */
 @OptIn(markerClass = UnstableApi.class)
 final class VideoPreloadCache {
+  private static final String TAG = "VideoPreloadCache";
   static final long PRELOAD_BYTES = 1024L * 1024L;
   static final long EFFECTIVE_BYTES = 512L * 1024L;
   static final long PARTIAL_BYTES = 768L * 1024L;
@@ -40,10 +41,8 @@ final class VideoPreloadCache {
   private static final Object LOCK = new Object();
   private static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(MAX_ACTIVE_PRELOADS);
   @Nullable private static SimpleCache cache;
-  private static int nextGeneration;
   private static final LinkedHashMap<String, ActivePreload> activePreloads = new LinkedHashMap<>();
   private static final LinkedHashSet<String> queuedUrls = new LinkedHashSet<>();
-  private static final LinkedHashMap<String, String> titlesByUrl = new LinkedHashMap<>();
 
   private VideoPreloadCache() {}
 
@@ -59,36 +58,7 @@ final class VideoPreloadCache {
         .setCacheKeyFactory(CacheKeyFactory.DEFAULT)
         .setUpstreamDataSourceFactory(new DefaultDataSource.Factory(context, httpFactory))
         .setCacheWriteDataSinkFactory(
-            new CacheDataSink.Factory().setCache(simpleCache).setFragmentSize(CACHE_FRAGMENT_BYTES))
-        .setEventListener(new TraceCacheEventListener(playerId));
-  }
-
-  /** 输出播放前首段缓存状态。 */
-  static void logHitBeforePlay(@NonNull Context context, long playerId, @Nullable String url) {
-    long bytes = cachedBytes(context, url);
-    new VideoLoadTrace(playerId)
-        .log(
-            "native.cache.hitBeforePlay",
-            "fullHit="
-                + (bytes >= PRELOAD_BYTES)
-                + " effectiveHit="
-                + (bytes >= EFFECTIVE_BYTES)
-                + " partialHit="
-                + (bytes >= PARTIAL_BYTES)
-                + " 消息="
-                + videoLabel(url)
-                + "播放"
-                + (bytes >= EFFECTIVE_BYTES ? "命中緩存" : "未命中緩存")
-                + " cachedBytes="
-                + bytes
-                + " requiredBytes="
-                + PRELOAD_BYTES
-                + " effectiveRequiredBytes="
-                + EFFECTIVE_BYTES
-                + " partialRequiredBytes="
-                + PARTIAL_BYTES
-                + " "
-                + VideoLoadTrace.urlFields(url));
+            new CacheDataSink.Factory().setCache(simpleCache).setFragmentSize(CACHE_FRAGMENT_BYTES));
   }
 
   /** 预加载视频首段。 */
@@ -115,17 +85,10 @@ final class VideoPreloadCache {
       @Nullable String userAgent) {
     LinkedHashSet<String> visibleUrls = sanitizeUrls(urls);
     synchronized (LOCK) {
-      syncTitlesLocked(visibleUrls, incomingTitlesByUrl);
-      LinkedHashSet<String> previousQueuedUrls = new LinkedHashSet<>(queuedUrls);
       queuedUrls.removeIf(
           queuedUrl -> {
-            boolean removed = !visibleUrls.contains(queuedUrl);
-            if (removed) {
-              logQueueUrl("preload.queue.remove", videoLabel(queuedUrl) + "離開隊列 原因=离屏", queuedUrl);
-            }
-            return removed;
+            return !visibleUrls.contains(queuedUrl);
           });
-      previousQueuedUrls.retainAll(queuedUrls);
       queuedUrls.clear();
       List<String> activeUrls = new ArrayList<>(activePreloads.keySet());
       for (String activeUrl : activeUrls) {
@@ -136,10 +99,6 @@ final class VideoPreloadCache {
       for (String visibleUrl : visibleUrls) {
         long cachedBytes = cachedBytes(context, visibleUrl);
         if (cachedBytes >= PRELOAD_BYTES) {
-          logQueueUrl(
-              "preload.queue.skipCached",
-              videoLabel(visibleUrl) + "已緩存 已缓存字节=" + cachedBytes,
-              visibleUrl);
           queuedUrls.remove(visibleUrl);
           continue;
         }
@@ -147,25 +106,7 @@ final class VideoPreloadCache {
           continue;
         }
         queuedUrls.add(visibleUrl);
-        if (!previousQueuedUrls.contains(visibleUrl)) {
-          logQueueUrl("preload.queue.add", videoLabel(visibleUrl) + "進入隊列", visibleUrl);
-        }
       }
-      new VideoLoadTrace(0)
-          .log(
-              "preload.queue.sync",
-              "可见视频数="
-                  + visibleUrls.size()
-                  + " 等待数="
-                  + queuedUrls.size()
-                  + " active数="
-                  + activePreloads.size()
-                  + " active队列="
-                  + shortLabels(activePreloads.keySet())
-                  + " 可见视频="
-                  + shortLabels(visibleUrls)
-                  + " 等待队列="
-                  + shortLabels(queuedUrls));
       startNextLocked(context, httpHeaders, userAgent);
     }
   }
@@ -182,16 +123,7 @@ final class VideoPreloadCache {
       return;
     }
     synchronized (LOCK) {
-      putTitleLocked(videoUrl, title);
       long cachedBytes = cachedBytes(context, videoUrl);
-      logQueueUrl(
-          "preload.queue.prioritize",
-          videoLabel(videoUrl)
-              + "被點擊 effectiveHit="
-              + (cachedBytes >= EFFECTIVE_BYTES)
-              + " 已缓存字节="
-              + cachedBytes,
-          videoUrl);
       if (cachedBytes >= EFFECTIVE_BYTES) {
         return;
       }
@@ -233,7 +165,6 @@ final class VideoPreloadCache {
       @Nullable String userAgent,
       @NonNull ActivePreload activePreload) {
     String url = activePreload.url;
-    long startMs = System.currentTimeMillis();
     CacheWriter writer =
         new CacheWriter(
             (CacheDataSource)
@@ -250,55 +181,16 @@ final class VideoPreloadCache {
     }
     try {
       writer.cache();
-      long cachedBytes = cachedBytes(context, url);
-      new VideoLoadTrace(0)
-          .log(
-              "preload.end",
-              "generation="
-                  + activePreload.generation
-                  + " "
-                  + videoLabel(url)
-                  + "緩存完成"
-                  + " effectiveHit="
-                  + (cachedBytes >= EFFECTIVE_BYTES)
-                  + " bytes="
-                  + Math.min(cachedBytes, PRELOAD_BYTES)
-                  + " cachedBytesAfter="
-                  + cachedBytes
-                  + " durationMs="
-                  + (System.currentTimeMillis() - startMs)
-                  + " "
-                  + VideoLoadTrace.urlFields(url));
-    } catch (InterruptedIOException error) {
-      long cachedBytes = cachedBytes(context, url);
-      new VideoLoadTrace(0)
-          .log(
-              "preload.cancelled",
-              "generation="
-                  + activePreload.generation
-                  + " "
-                  + videoLabel(url)
-                  + "緩存已取消"
-                  + " 已缓存字节="
-                  + cachedBytes
-                  + " "
-                  + VideoLoadTrace.urlFields(url));
+    } catch (InterruptedIOException ignored) {
     } catch (IOException error) {
-      long cachedBytes = cachedBytes(context, url);
-      new VideoLoadTrace(0)
-          .log(
-              "preload.error",
-              "generation="
-                  + activePreload.generation
-                  + " "
-                  + videoLabel(url)
-                  + "緩存失敗"
-                  + " error="
-                  + error.getClass().getSimpleName()
-                  + " cachedBytesAfter="
-                  + cachedBytes
-                  + " "
-                  + VideoLoadTrace.urlFields(url));
+      Log.w(
+          TAG,
+          "preload.error error="
+              + error.getClass().getSimpleName()
+              + " cachedBytesAfter="
+              + cachedBytes(context, url)
+              + " urlHash="
+              + Math.abs(url.hashCode()));
     } finally {
       synchronized (LOCK) {
         if (activePreloads.get(url) == activePreload) {
@@ -318,21 +210,8 @@ final class VideoPreloadCache {
       if (nextUrl == null) {
         return;
       }
-      ActivePreload activePreload = new ActivePreload(nextUrl, ++nextGeneration);
+      ActivePreload activePreload = new ActivePreload(nextUrl);
       activePreloads.put(nextUrl, activePreload);
-      long cachedBytes = cachedBytes(context, nextUrl);
-      new VideoLoadTrace(0)
-          .log(
-              "preload.start",
-              "generation="
-                  + activePreload.generation
-                  + " "
-                  + videoLabel(nextUrl)
-                  + "開始緩存"
-                  + " range=bytes=0-1048575 已缓存字节="
-                  + cachedBytes
-                  + " "
-                  + VideoLoadTrace.urlFields(nextUrl));
       EXECUTOR.execute(() -> preloadOnExecutor(context, httpHeaders, userAgent, activePreload));
     }
   }
@@ -344,10 +223,6 @@ final class VideoPreloadCache {
       queuedUrls.remove(url);
       long cachedBytes = cachedBytes(context, url);
       if (cachedBytes >= PRELOAD_BYTES) {
-        logQueueUrl(
-            "preload.queue.skipCached",
-            videoLabel(url) + "已緩存 已缓存字节=" + cachedBytes,
-            url);
         continue;
       }
       return url;
@@ -399,18 +274,6 @@ final class VideoPreloadCache {
     if (writer != null) {
       writer.cancel();
     }
-    new VideoLoadTrace(0)
-        .log(
-            "preload.cancel",
-            "generation="
-                + activePreload.generation
-                + " "
-                + videoLabel(url)
-                + "緩存取消"
-                + " 原因="
-                + readableReason(reason)
-                + " "
-                + VideoLoadTrace.urlFields(url));
   }
 
   @NonNull
@@ -428,110 +291,12 @@ final class VideoPreloadCache {
     return result;
   }
 
-  private static void logQueueUrl(
-      @NonNull String event, @NonNull String fields, @NonNull String url) {
-    new VideoLoadTrace(0).log(event, fields + " " + VideoLoadTrace.urlFields(url));
-  }
-
-  private static void syncTitlesLocked(
-      @NonNull LinkedHashSet<String> visibleUrls,
-      @NonNull Map<String, String> incomingTitlesByUrl) {
-    titlesByUrl.keySet().removeIf(
-        url ->
-            !visibleUrls.contains(url)
-                && !queuedUrls.contains(url)
-                && !activePreloads.containsKey(url));
-    for (String url : visibleUrls) {
-      putTitleLocked(url, incomingTitlesByUrl.get(url));
-    }
-  }
-
-  private static void putTitleLocked(@NonNull String url, @Nullable String title) {
-    String cleanTitle = title == null ? "" : title.trim().replaceAll("\\s+", " ");
-    if (!cleanTitle.isEmpty()) {
-      titlesByUrl.put(url, cleanTitle);
-    }
-  }
-
-  @NonNull
-  private static String videoLabel(@Nullable String url) {
-    String title = url == null ? "" : titlesByUrl.getOrDefault(url, "");
-    if (title.trim().isEmpty()) {
-      title = shortPath(url);
-    }
-    return "《" + title + "》的視頻";
-  }
-
-  @NonNull
-  private static String shortLabels(@NonNull Iterable<String> urls) {
-    StringBuilder builder = new StringBuilder("[");
-    boolean first = true;
-    for (String url : urls) {
-      if (!first) {
-        builder.append(",");
-      }
-      builder.append(videoLabel(url)).append(":").append(shortPath(url));
-      first = false;
-    }
-    return builder.append("]").toString();
-  }
-
-  @NonNull
-  private static String shortPath(@Nullable String url) {
-    if (url == null || url.trim().isEmpty()) {
-      return "无";
-    }
-    try {
-      String path = URI.create(url).getPath();
-      return path == null || path.isEmpty() ? url : path;
-    } catch (IllegalArgumentException error) {
-      return url;
-    }
-  }
-
-  @NonNull
-  private static String readableReason(@NonNull String reason) {
-    switch (reason) {
-      case "dispose":
-        return "销毁";
-      case "emptyVisible":
-        return "无可见视频";
-      case "replace":
-        return "替换";
-      case "clear":
-        return "清空";
-      case "tap":
-        return "点击";
-      default:
-        return reason;
-    }
-  }
-
-  private static final class TraceCacheEventListener implements CacheDataSource.EventListener {
-    private final VideoLoadTrace trace;
-
-    TraceCacheEventListener(long playerId) {
-      trace = new VideoLoadTrace(playerId);
-    }
-
-    @Override
-    public void onCachedBytesRead(long cacheSizeBytes, long cachedBytesRead) {
-    }
-
-    @Override
-    public void onCacheIgnored(int reason) {
-      trace.log("native.cache.ignored", "原因=" + reason);
-    }
-  }
-
   private static final class ActivePreload {
     @NonNull final String url;
-    final int generation;
     @Nullable CacheWriter writer;
 
-    ActivePreload(@NonNull String url, int generation) {
+    ActivePreload(@NonNull String url) {
       this.url = url;
-      this.generation = generation;
     }
   }
 }
