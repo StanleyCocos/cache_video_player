@@ -30,8 +30,9 @@ public class PlatformViewVideoPlayer extends VideoPlayer {
       @NonNull VideoPlayerCallbacks events,
       @NonNull MediaItem mediaItem,
       @NonNull VideoPlayerOptions options,
+      long playerId,
       @NonNull ExoPlayerProvider exoPlayerProvider) {
-    super(events, mediaItem, options, /* surfaceProducer */ null, exoPlayerProvider);
+    super(events, mediaItem, options, playerId, /* surfaceProducer */ null, exoPlayerProvider);
   }
 
   /**
@@ -50,18 +51,20 @@ public class PlatformViewVideoPlayer extends VideoPlayer {
       @NonNull Context context,
       @NonNull VideoPlayerCallbacks events,
       @NonNull VideoAsset asset,
-      @NonNull VideoPlayerOptions options) {
+      @NonNull VideoPlayerOptions options,
+      long playerId) {
     return new PlatformViewVideoPlayer(
         events,
         asset.getMediaItem(),
         options,
+        playerId,
         () -> {
           androidx.media3.exoplayer.trackselection.DefaultTrackSelector trackSelector =
               new androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context);
           ExoPlayer.Builder builder =
               new ExoPlayer.Builder(context)
                   .setTrackSelector(trackSelector)
-                  .setMediaSourceFactory(asset.getMediaSourceFactory(context));
+                  .setMediaSourceFactory(asset.getMediaSourceFactory(context, playerId));
           return builder.build();
         });
   }

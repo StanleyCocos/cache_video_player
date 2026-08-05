@@ -13,7 +13,6 @@ import androidx.media3.common.MediaItem;
 import androidx.media3.common.MimeTypes;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DataSource;
-import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.source.MediaSource;
@@ -59,8 +58,8 @@ final class HttpVideoAsset extends VideoAsset {
 
   @NonNull
   @Override
-  public MediaSource.Factory getMediaSourceFactory(@NonNull Context context) {
-    return getMediaSourceFactory(context, new DefaultHttpDataSource.Factory());
+  public MediaSource.Factory getMediaSourceFactory(@NonNull Context context, long playerId) {
+    return getMediaSourceFactory(context, new DefaultHttpDataSource.Factory(), playerId);
   }
 
   /**
@@ -74,9 +73,10 @@ final class HttpVideoAsset extends VideoAsset {
    */
   @VisibleForTesting
   MediaSource.Factory getMediaSourceFactory(
-      Context context, DefaultHttpDataSource.Factory initialFactory) {
+      Context context, DefaultHttpDataSource.Factory initialFactory, long playerId) {
     unstableUpdateDataSourceFactory(initialFactory, httpHeaders, userAgent);
-    DataSource.Factory dataSourceFactory = new DefaultDataSource.Factory(context, initialFactory);
+    DataSource.Factory dataSourceFactory =
+        VideoPreloadCache.buildFactory(context, initialFactory, playerId);
     return new DefaultMediaSourceFactory(context).setDataSourceFactory(dataSourceFactory);
   }
 

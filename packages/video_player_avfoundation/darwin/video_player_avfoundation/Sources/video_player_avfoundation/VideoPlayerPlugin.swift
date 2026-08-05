@@ -61,12 +61,14 @@ final class DefaultAssetProvider: NSObject, FVPAssetProvider {
 }
 
 public final class VideoPlayerPlugin: NSObject, FlutterPlugin, AVFoundationVideoPlayerApi {
+  private static let preloadChannelName = "duyo/video_preload_cache"
   private let binaryMessenger: FlutterBinaryMessenger
   private let textureRegistry: FlutterTextureRegistry
   private let displayLinkFactory: DisplayLinkFactory
   private let avFactory: FVPAVFactory
   private let viewProvider: FVPViewProvider
   private let assetProvider: FVPAssetProvider
+  private var preloadChannel: FlutterMethodChannel?
   private var nextPlayerIdentifier: Int64 = 1
   var playersByIdentifier: [Int64: FVPVideoPlayer] = [:]
 
@@ -125,6 +127,11 @@ public final class VideoPlayerPlugin: NSObject, FlutterPlugin, AVFoundationVideo
     self.displayLinkFactory = displayLinkFactory
     self.avFactory = avFactory
     super.init()
+    preloadChannel = FlutterMethodChannel(
+      name: Self.preloadChannelName,
+      binaryMessenger: binaryMessenger
+    )
+    preloadChannel?.setMethodCallHandler(handlePreloadMethod)
   }
 
   public func detachFromEngine(for registrar: FlutterPluginRegistrar) {
@@ -143,6 +150,8 @@ public final class VideoPlayerPlugin: NSObject, FlutterPlugin, AVFoundationVideo
       let messenger = registrar.messenger
     #endif
     AVFoundationVideoPlayerApiSetup.setUp(binaryMessenger: messenger, api: nil)
+    preloadChannel?.setMethodCallHandler(nil)
+    preloadChannel = nil
   }
 
   func initialize() throws {
@@ -278,6 +287,44 @@ public final class VideoPlayerPlugin: NSObject, FlutterPlugin, AVFoundationVideo
     }
     let asset = avFactory.urlAsset(with: url, options: itemOptions)
     return avFactory.playerItem(with: asset)
+  }
+
+  private func handlePreloadMethod(
+    _ call: FlutterMethodCall,
+    result: @escaping FlutterResult
+  ) {
+    let arguments = call.arguments as? [String: Any] ?? [:]
+    switch call.method {
+    case "preload":
+      DuyoVideoPreloadCache.shared.preload(
+        url: arguments["url"] as? String,
+        title: arguments["title"] as? String
+      )
+      result(nil)
+    case "syncQueue":
+      DuyoVideoPreloadCache.shared.syncQueue(
+        urls: arguments["urls"] as? [String] ?? [],
+        titlesByUrl: arguments["titlesByUrl"] as? [String: String] ?? [:]
+      )
+      result(nil)
+    case "prioritize":
+      DuyoVideoPreloadCache.shared.prioritize(
+        url: arguments["url"] as? String,
+        title: arguments["title"] as? String
+      )
+      result(nil)
+    case "clearQueue":
+      DuyoVideoPreloadCache.shared.clear(reason: arguments["reason"] as? String ?? "clear")
+      result(nil)
+    case "cancelPreload":
+      DuyoVideoPreloadCache.shared.cancel(reason: arguments["reason"] as? String ?? "cancel")
+      result(nil)
+    case "cachedBytes":
+      let bytes = DuyoVideoPreloadCache.shared.cachedBytes(url: arguments["url"] as? String)
+      result(min(bytes, Int64(Int32.max)))
+    default:
+      result(FlutterMethodNotImplemented)
+    }
   }
 }
 

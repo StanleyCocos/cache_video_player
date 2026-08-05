@@ -7,7 +7,6 @@
 
 package io.flutter.plugins.videoplayer
 
-import android.util.Log
 import io.flutter.plugin.common.BasicMessageChannel
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
@@ -30,7 +29,7 @@ private object MessagesPigeonUtils {
       listOf(
           exception.javaClass.simpleName,
           exception.toString(),
-          "Cause: " + exception.cause + ", Stacktrace: " + Log.getStackTraceString(exception))
+          "Cause: " + exception.cause + ", Stacktrace: " + exception.stackTraceToString())
     }
   }
 

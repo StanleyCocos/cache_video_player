@@ -80,7 +80,7 @@ public abstract class VideoAsset {
    * @return configured factory, or {@code null} if not needed for this asset type.
    */
   @NonNull
-  public abstract MediaSource.Factory getMediaSourceFactory(@NonNull Context context);
+  public abstract MediaSource.Factory getMediaSourceFactory(@NonNull Context context, long playerId);
 
   /** Streaming formats that can be provided to the video player as a hint. */
   enum StreamingFormat {
