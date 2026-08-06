@@ -11,17 +11,14 @@ final class DuyoVideoPreloadCache {
 
   private static let preloadBytes: Int64 = 1_048_576
   private static let effectiveBytes: Int64 = 524_288
-  private static let partialBytes: Int64 = 786_432
   private static let maxActivePreloads = 2
   private static let maxCacheBytes: Int64 = 200 * 1_024 * 1_024
-  private static let fallbackTitle = "未命名視頻"
 
   private let lockQueue = DispatchQueue(label: "duyo.video.preload.cache")
   private let fileManager = FileManager.default
   private let cacheDirectory: URL
   private var queuedUrls: [String] = []
   private var activeTasks: [String: URLSessionDataTask] = [:]
-  private var titlesByUrl: [String: String] = [:]
 
   private init() {
     let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
@@ -31,25 +28,17 @@ final class DuyoVideoPreloadCache {
   }
 
   /// 预加载单个视频。
-  func preload(url: String?, title: String? = nil) {
+  func preload(url: String?, title _: String? = nil) {
     guard let videoUrl = sanitize(url) else {
-      DuyoVideoLoadDebugLog.write("VideoPreloadCache", "preload ignored invalid url")
       return
     }
-    registerTitle(url: videoUrl, title: title)
-    DuyoVideoLoadDebugLog.write(
-      "VideoPreloadCache",
-      "\(titleLabel(url: videoUrl))開始下載 urlHash=\(DuyoVideoLoadDebugLog.urlHash(videoUrl))"
-    )
-    syncQueue(urls: [videoUrl], titlesByUrl: [videoUrl: titleOf(url: videoUrl)])
+    syncQueue(urls: [videoUrl], titlesByUrl: [:])
   }
 
   /// 同步当前可见视频预加载队列。
-  func syncQueue(urls: [String], titlesByUrl: [String: String]) {
+  func syncQueue(urls: [String], titlesByUrl _: [String: String]) {
     let visibleUrls = sanitize(urls)
-    DuyoVideoLoadDebugLog.write("VideoPreloadCache", "syncQueue visibleCount=\(visibleUrls.count)")
     lockQueue.async {
-      self.registerTitlesLocked(titlesByUrl)
       self.queuedUrls.removeAll { url in
         !visibleUrls.contains(url)
       }
@@ -59,10 +48,6 @@ final class DuyoVideoPreloadCache {
       for visibleUrl in visibleUrls {
         let cachedBytes = self.cachedBytesLocked(url: visibleUrl)
         if cachedBytes >= Self.preloadBytes {
-          DuyoVideoLoadDebugLog.write(
-            "VideoPreloadCache",
-            "\(self.titleLabelLocked(url: visibleUrl))已滿緩存 cachedBytes=\(cachedBytes) urlHash=\(DuyoVideoLoadDebugLog.urlHash(visibleUrl))"
-          )
           continue
         }
         if self.activeTasks[visibleUrl] != nil || self.queuedUrls.contains(visibleUrl) {
@@ -75,23 +60,13 @@ final class DuyoVideoPreloadCache {
   }
 
   /// 点击视频时给未有效命中的当前视频让路。
-  func prioritize(url: String?, title: String?) {
+  func prioritize(url: String?, title _: String?) {
     guard let videoUrl = sanitize(url) else {
-      DuyoVideoLoadDebugLog.write("VideoPreloadCache", "prioritize ignored invalid url")
       return
     }
-    registerTitle(url: videoUrl, title: title)
-    DuyoVideoLoadDebugLog.write(
-      "VideoPreloadCache",
-      "\(titleLabel(url: videoUrl))點擊播放 urlHash=\(DuyoVideoLoadDebugLog.urlHash(videoUrl))"
-    )
     lockQueue.async {
       let cachedBytes = self.cachedBytesLocked(url: videoUrl)
       if cachedBytes >= Self.effectiveBytes {
-        DuyoVideoLoadDebugLog.write(
-          "VideoPreloadCache",
-          "\(self.titleLabelLocked(url: videoUrl))點擊播放命中緩存 cachedBytes=\(cachedBytes) urlHash=\(DuyoVideoLoadDebugLog.urlHash(videoUrl))"
-        )
         return
       }
       self.queuedUrls.removeAll()
@@ -108,7 +83,6 @@ final class DuyoVideoPreloadCache {
 
   /// 取消当前队列。
   func cancel(reason: String) {
-    DuyoVideoLoadDebugLog.write("VideoPreloadCache", "cancel reason=\(reason)")
     lockQueue.async {
       self.queuedUrls.removeAll()
       for activeUrl in Array(self.activeTasks.keys) {
@@ -120,16 +94,11 @@ final class DuyoVideoPreloadCache {
   /// 查询首段缓存字节数。
   func cachedBytes(url: String?) -> Int64 {
     guard let videoUrl = sanitize(url) else {
-      DuyoVideoLoadDebugLog.write("VideoPreloadCache", "cachedBytes ignored invalid url")
       return 0
     }
     let bytes = lockQueue.sync {
       cachedBytesLocked(url: videoUrl)
     }
-    DuyoVideoLoadDebugLog.write(
-      "VideoPreloadCache",
-      "\(titleLabel(url: videoUrl))緩存查詢 bytes=\(bytes) urlHash=\(DuyoVideoLoadDebugLog.urlHash(videoUrl))"
-    )
     return bytes
   }
 
@@ -142,35 +111,19 @@ final class DuyoVideoPreloadCache {
       }
       var request = URLRequest(url: URL(string: nextUrl)!)
       request.setValue("bytes=0-\(Self.preloadBytes - 1)", forHTTPHeaderField: "Range")
-      DuyoVideoLoadDebugLog.write(
-        "VideoPreloadCache",
-        "\(titleLabelLocked(url: nextUrl))開始下載 urlHash=\(DuyoVideoLoadDebugLog.urlHash(nextUrl))"
-      )
       let task = URLSession.shared.dataTask(with: request) { data, _, error in
         self.lockQueue.async {
           self.finish(url: nextUrl, data: data, error: error)
         }
       }
       activeTasks[nextUrl] = task
-      DuyoVideoLoadDebugLog.write(
-        "VideoPreloadCache",
-        "\(titleLabelLocked(url: nextUrl))加入下載 active=\(activeTasks.count) queued=\(queuedUrls.count) urlHash=\(DuyoVideoLoadDebugLog.urlHash(nextUrl))"
-      )
       task.resume()
     }
   }
 
   private func finish(url: String, data: Data?, error: Error?) {
     activeTasks.removeValue(forKey: url)
-    if let error {
-      if (error as? URLError)?.code != .cancelled {
-        logPreloadError(url: url, error: error)
-      } else {
-        DuyoVideoLoadDebugLog.write(
-          "VideoPreloadCache",
-          "\(self.titleLabelLocked(url: url))下載取消 urlHash=\(DuyoVideoLoadDebugLog.urlHash(url))"
-        )
-      }
+    if error != nil {
       startNext()
       return
     }
@@ -178,13 +131,7 @@ final class DuyoVideoPreloadCache {
       do {
         try data.write(to: cacheFile(url: url), options: .atomic)
         touchCacheFile(url: url)
-        DuyoVideoLoadDebugLog.write(
-          "VideoPreloadCache",
-          "\(titleLabelLocked(url: url))下載完成 cachedBytes=\(cachedBytesLocked(url: url)) urlHash=\(DuyoVideoLoadDebugLog.urlHash(url))"
-        )
-      } catch {
-        logPreloadError(url: url, error: error)
-      }
+      } catch {}
       trimCacheLocked(protectedUrl: url)
     }
     startNext()
@@ -212,49 +159,6 @@ final class DuyoVideoPreloadCache {
 
   private func cacheKey(url: String) -> String {
     SHA256.hash(data: Data(url.utf8)).map { String(format: "%02x", $0) }.joined()
-  }
-
-  func titleOf(url: String?) -> String {
-    guard let videoUrl = sanitize(url) else {
-      return Self.fallbackTitle
-    }
-    return lockQueue.sync {
-      titleOfLocked(url: videoUrl)
-    }
-  }
-
-  func titleLabel(url: String?) -> String {
-    "《\(titleOf(url: url))》"
-  }
-
-  private func registerTitle(url: String, title: String?) {
-    let cleanTitle = normalizeTitle(title)
-    lockQueue.sync {
-      if cleanTitle == Self.fallbackTitle, self.titlesByUrl[url] != nil {
-        return
-      }
-      self.titlesByUrl[url] = cleanTitle
-    }
-  }
-
-  private func registerTitlesLocked(_ incomingTitlesByUrl: [String: String]) {
-    for (url, title) in incomingTitlesByUrl {
-      guard let videoUrl = sanitize(url) else { continue }
-      titlesByUrl[videoUrl] = normalizeTitle(title)
-    }
-  }
-
-  private func titleOfLocked(url: String) -> String {
-    normalizeTitle(titlesByUrl[url])
-  }
-
-  private func titleLabelLocked(url: String) -> String {
-    "《\(titleOfLocked(url: url))》"
-  }
-
-  private func normalizeTitle(_ title: String?) -> String {
-    let value = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    return value.isEmpty ? Self.fallbackTitle : value
   }
 
   private func sanitize(_ url: String?) -> String? {
@@ -332,13 +236,6 @@ final class DuyoVideoPreloadCache {
       let modifiedAt = attributes[.modificationDate] as? Date ?? .distantPast
       return CacheFile(url: url, size: size.int64Value, modifiedAt: modifiedAt)
     }
-  }
-
-  private func logPreloadError(url: String, error: Error) {
-    DuyoVideoLoadDebugLog.write(
-      "VideoPreloadCache",
-      "\(titleLabelLocked(url: url))下載失敗 error=\(type(of: error)) cachedBytesAfter=\(cachedBytesLocked(url: url)) urlHash=\(DuyoVideoLoadDebugLog.urlHash(url))"
-    )
   }
 
 }

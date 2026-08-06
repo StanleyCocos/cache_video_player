@@ -75,20 +75,6 @@ final class HttpVideoAsset extends VideoAsset {
   MediaSource.Factory getMediaSourceFactory(
       Context context, DefaultHttpDataSource.Factory initialFactory, long playerId) {
     unstableUpdateDataSourceFactory(initialFactory, httpHeaders, userAgent);
-    long cachedBytesBeforePlay = VideoPreloadCache.cachedBytes(context, assetUrl);
-    String hitText = cachedBytesBeforePlay >= VideoPreloadCache.EFFECTIVE_BYTES
-        ? "播放命中緩存"
-        : (cachedBytesBeforePlay > 0 ? "播放部分命中緩存" : "播放未命中緩存");
-    VideoLoadDebugLog.write(
-        "HttpVideoAsset",
-        VideoPreloadCache.titleLabel(assetUrl)
-            + hitText
-            + " cachedBytes="
-            + cachedBytesBeforePlay
-            + " playerId="
-            + playerId
-            + " urlHash="
-            + VideoLoadDebugLog.urlHash(assetUrl));
     DataSource.Factory dataSourceFactory =
         VideoPreloadCache.buildFactory(context, initialFactory, playerId);
     return new DefaultMediaSourceFactory(context).setDataSourceFactory(dataSourceFactory);

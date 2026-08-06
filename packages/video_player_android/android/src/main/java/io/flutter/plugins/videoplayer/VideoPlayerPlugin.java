@@ -88,7 +88,6 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
 
   @Override
   public void initialize() {
-    VideoLoadDebugLog.write("VideoPlayerPlugin", "initialize disposeAll");
     disposeAllPlayers();
   }
 
@@ -98,14 +97,6 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
     final VideoAsset videoAsset = videoAssetWithOptions(options);
 
     long id = nextPlayerIdentifier++;
-    VideoPreloadCache.registerTitle(options.getUri(), null);
-    VideoLoadDebugLog.write(
-        "VideoPlayerPlugin",
-        VideoPreloadCache.titleLabel(options.getUri())
-            + "創建播放器 type=platformView playerId="
-            + id
-            + " urlHash="
-            + VideoLoadDebugLog.urlHash(options.getUri()));
     final String streamInstance = Long.toString(id);
     VideoPlayer videoPlayer =
         PlatformViewVideoPlayer.create(
@@ -125,14 +116,6 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
     final VideoAsset videoAsset = videoAssetWithOptions(options);
 
     long id = nextPlayerIdentifier++;
-    VideoPreloadCache.registerTitle(options.getUri(), null);
-    VideoLoadDebugLog.write(
-        "VideoPlayerPlugin",
-        VideoPreloadCache.titleLabel(options.getUri())
-            + "創建播放器 type=texture playerId="
-            + id
-            + " urlHash="
-            + VideoLoadDebugLog.urlHash(options.getUri()));
     final String streamInstance = Long.toString(id);
     TextureRegistry.SurfaceProducer handle = flutterState.textureRegistry.createSurfaceProducer();
     VideoPlayer videoPlayer =
@@ -205,7 +188,6 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
 
   @Override
   public void dispose(long playerId) {
-    VideoLoadDebugLog.write("VideoPlayerPlugin", "dispose playerId=" + playerId);
     VideoPlayer player = getPlayer(playerId);
     player.dispose();
     videoPlayers.remove(playerId);
@@ -229,11 +211,6 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
       return;
     }
     switch (call.method) {
-      case "setLogEnabled":
-        Boolean enabled = call.argument("enabled");
-        VideoLoadDebugLog.setEnabled(enabled != null && enabled);
-        result.success(null);
-        break;
       case "preload":
         VideoPreloadCache.preload(
             flutterState.applicationContext,
