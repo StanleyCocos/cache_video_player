@@ -32,17 +32,14 @@ import java.util.concurrent.Executors;
 final class VideoPreloadCache {
   static final long PRELOAD_BYTES = 1024L * 1024L;
   static final long EFFECTIVE_BYTES = 512L * 1024L;
-  static final long PARTIAL_BYTES = 768L * 1024L;
   static final long CACHE_MAX_BYTES = 200L * 1024L * 1024L;
   private static final int MAX_ACTIVE_PRELOADS = 2;
   private static final long CACHE_FRAGMENT_BYTES = 256L * 1024L;
   private static final Object LOCK = new Object();
   private static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(MAX_ACTIVE_PRELOADS);
   @Nullable private static SimpleCache cache;
-  private static final String FALLBACK_TITLE = "未命名視頻";
   private static final LinkedHashMap<String, ActivePreload> activePreloads = new LinkedHashMap<>();
   private static final LinkedHashSet<String> queuedUrls = new LinkedHashSet<>();
-  private static final LinkedHashMap<String, String> titlesByUrl = new LinkedHashMap<>();
 
   private VideoPreloadCache() {}
 
@@ -53,7 +50,6 @@ final class VideoPreloadCache {
       @NonNull DefaultHttpDataSource.Factory httpFactory,
       long playerId) {
     SimpleCache simpleCache = getCache(context);
-    VideoLoadDebugLog.write("VideoPreloadCache", "buildFactory playerId=" + playerId);
     return new CacheDataSource.Factory()
         .setCache(simpleCache)
         .setCacheKeyFactory(CacheKeyFactory.DEFAULT)
@@ -71,13 +67,8 @@ final class VideoPreloadCache {
       @Nullable String userAgent) {
     String videoUrl = url == null ? "" : url.trim();
     if (videoUrl.isEmpty()) {
-      VideoLoadDebugLog.write("VideoPreloadCache", "preload ignored empty url");
       return;
     }
-    registerTitle(videoUrl, title);
-    VideoLoadDebugLog.write(
-        "VideoPreloadCache",
-        titleLabel(videoUrl) + "開始下載 urlHash=" + VideoLoadDebugLog.urlHash(videoUrl));
     List<String> urls = new ArrayList<>();
     urls.add(videoUrl);
     syncQueue(context, urls, new LinkedHashMap<>(), httpHeaders, userAgent);
@@ -91,10 +82,7 @@ final class VideoPreloadCache {
       @NonNull Map<String, String> httpHeaders,
       @Nullable String userAgent) {
     LinkedHashSet<String> visibleUrls = sanitizeUrls(urls);
-    VideoLoadDebugLog.write(
-        "VideoPreloadCache", "syncQueue visibleCount=" + visibleUrls.size());
     synchronized (LOCK) {
-      registerTitlesLocked(incomingTitlesByUrl);
       queuedUrls.removeIf(
           queuedUrl -> {
             return !visibleUrls.contains(queuedUrl);
@@ -109,13 +97,6 @@ final class VideoPreloadCache {
       for (String visibleUrl : visibleUrls) {
         long cachedBytes = cachedBytes(context, visibleUrl);
         if (cachedBytes >= PRELOAD_BYTES) {
-          VideoLoadDebugLog.write(
-              "VideoPreloadCache",
-              titleLabelLocked(visibleUrl)
-                  + "已滿緩存 cachedBytes="
-                  + cachedBytes
-                  + " urlHash="
-                  + VideoLoadDebugLog.urlHash(visibleUrl));
           queuedUrls.remove(visibleUrl);
           continue;
         }
@@ -137,23 +118,11 @@ final class VideoPreloadCache {
       @Nullable String userAgent) {
     String videoUrl = url == null ? "" : url.trim();
     if (videoUrl.isEmpty()) {
-      VideoLoadDebugLog.write("VideoPreloadCache", "prioritize ignored empty url");
       return;
     }
-    registerTitle(videoUrl, title);
-    VideoLoadDebugLog.write(
-        "VideoPreloadCache",
-        titleLabel(videoUrl) + "點擊播放 urlHash=" + VideoLoadDebugLog.urlHash(videoUrl));
     synchronized (LOCK) {
       long cachedBytes = cachedBytes(context, videoUrl);
       if (cachedBytes >= EFFECTIVE_BYTES) {
-        VideoLoadDebugLog.write(
-            "VideoPreloadCache",
-            titleLabelLocked(videoUrl)
-                + "點擊播放命中緩存 cachedBytes="
-                + cachedBytes
-                + " urlHash="
-                + VideoLoadDebugLog.urlHash(videoUrl));
         return;
       }
       queuedUrls.clear();
@@ -168,7 +137,6 @@ final class VideoPreloadCache {
 
   /** 取消当前预加载。 */
   static void cancel(@NonNull String reason) {
-    VideoLoadDebugLog.write("VideoPreloadCache", "cancel reason=" + reason);
     synchronized (LOCK) {
       queuedUrls.clear();
       cancelAllActiveLocked(reason);
@@ -184,17 +152,9 @@ final class VideoPreloadCache {
   static long cachedBytes(@NonNull Context context, @Nullable String url) {
     String videoUrl = url == null ? "" : url.trim();
     if (videoUrl.isEmpty()) {
-      VideoLoadDebugLog.write("VideoPreloadCache", "cachedBytes ignored empty url");
       return 0;
     }
     long bytes = getCache(context).getCachedBytes(videoUrl, 0, PRELOAD_BYTES);
-    VideoLoadDebugLog.write(
-        "VideoPreloadCache",
-        titleLabel(videoUrl)
-            + "緩存查詢 bytes="
-            + bytes
-            + " urlHash="
-            + VideoLoadDebugLog.urlHash(videoUrl));
     return bytes;
   }
 
@@ -219,29 +179,9 @@ final class VideoPreloadCache {
       activePreload.writer = writer;
     }
     try {
-      VideoLoadDebugLog.write(
-          "VideoPreloadCache", titleLabel(url) + "開始下載 urlHash=" + VideoLoadDebugLog.urlHash(url));
       writer.cache();
-      VideoLoadDebugLog.write(
-          "VideoPreloadCache",
-          titleLabel(url)
-              + "下載完成 cachedBytes="
-              + cachedBytes(context, url)
-              + " urlHash="
-              + VideoLoadDebugLog.urlHash(url));
     } catch (InterruptedIOException ignored) {
-      VideoLoadDebugLog.write(
-          "VideoPreloadCache", titleLabel(url) + "下載取消 urlHash=" + VideoLoadDebugLog.urlHash(url));
     } catch (IOException error) {
-      VideoLoadDebugLog.warn(
-          "VideoPreloadCache",
-          titleLabel(url)
-              + "下載失敗 error="
-              + error.getClass().getSimpleName()
-              + " cachedBytesAfter="
-              + cachedBytes(context, url)
-              + " urlHash="
-              + VideoLoadDebugLog.urlHash(url));
     } finally {
       synchronized (LOCK) {
         if (activePreloads.get(url) == activePreload) {
@@ -263,15 +203,6 @@ final class VideoPreloadCache {
       }
       ActivePreload activePreload = new ActivePreload(nextUrl);
       activePreloads.put(nextUrl, activePreload);
-      VideoLoadDebugLog.write(
-          "VideoPreloadCache",
-          titleLabelLocked(nextUrl)
-              + "加入下載 active="
-              + activePreloads.size()
-              + " queued="
-              + queuedUrls.size()
-              + " urlHash="
-              + VideoLoadDebugLog.urlHash(nextUrl));
       EXECUTOR.execute(() -> preloadOnExecutor(context, httpHeaders, userAgent, activePreload));
     }
   }
@@ -283,13 +214,6 @@ final class VideoPreloadCache {
       queuedUrls.remove(url);
       long cachedBytes = cachedBytes(context, url);
       if (cachedBytes >= PRELOAD_BYTES) {
-        VideoLoadDebugLog.write(
-            "VideoPreloadCache",
-            titleLabelLocked(url)
-                + "跳過下載 已滿緩存 cachedBytes="
-                + cachedBytes
-                + " urlHash="
-                + VideoLoadDebugLog.urlHash(url));
         continue;
       }
       return url;
@@ -341,54 +265,6 @@ final class VideoPreloadCache {
     if (writer != null) {
       writer.cancel();
     }
-  }
-
-  @NonNull
-  static String titleOf(@Nullable String url) {
-    String videoUrl = url == null ? "" : url.trim();
-    if (videoUrl.isEmpty()) {
-      return FALLBACK_TITLE;
-    }
-    synchronized (LOCK) {
-      String title = titlesByUrl.get(videoUrl);
-      return title == null || title.trim().isEmpty() ? FALLBACK_TITLE : title;
-    }
-  }
-
-  @NonNull
-  static String titleLabel(@Nullable String url) {
-    return "《" + titleOf(url) + "》";
-  }
-
-  static void registerTitle(@Nullable String url, @Nullable String title) {
-    String videoUrl = url == null ? "" : url.trim();
-    if (videoUrl.isEmpty()) {
-      return;
-    }
-    String cleanTitle = title == null ? "" : title.trim();
-    synchronized (LOCK) {
-      if (cleanTitle.isEmpty() && titlesByUrl.containsKey(videoUrl)) {
-        return;
-      }
-      titlesByUrl.put(videoUrl, cleanTitle.isEmpty() ? FALLBACK_TITLE : cleanTitle);
-    }
-  }
-
-  private static void registerTitlesLocked(@NonNull Map<String, String> incomingTitlesByUrl) {
-    for (Map.Entry<String, String> entry : incomingTitlesByUrl.entrySet()) {
-      String url = entry.getKey() == null ? "" : entry.getKey().trim();
-      if (url.isEmpty()) {
-        continue;
-      }
-      String title = entry.getValue() == null ? "" : entry.getValue().trim();
-      titlesByUrl.put(url, title.isEmpty() ? FALLBACK_TITLE : title);
-    }
-  }
-
-  @NonNull
-  private static String titleLabelLocked(@NonNull String url) {
-    String title = titlesByUrl.get(url);
-    return "《" + (title == null || title.trim().isEmpty() ? FALLBACK_TITLE : title) + "》";
   }
 
   @NonNull
