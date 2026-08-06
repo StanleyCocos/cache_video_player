@@ -6,8 +6,10 @@ package io.flutter.plugins.videoplayer;
 
 import static org.junit.Assert.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.*;
 
+import android.content.Context;
 import android.view.Surface;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
@@ -199,5 +201,76 @@ public final class TextureVideoPlayerTest {
     InOrder inOrder = inOrder(mockExoPlayer, mockProducer);
     inOrder.verify(mockExoPlayer).release();
     inOrder.verify(mockProducer).release();
+  }
+
+  @Test
+  public void createUsesWarmPlayerWithoutFakingReadyState() {
+    when(mockExoPlayer.getPlaybackState()).thenReturn(Player.STATE_IDLE);
+    when(mockExoPlayer.getVideoSize()).thenReturn(new VideoSize(300, 200));
+    VideoPreloadCache.putWarmPlayerForTest(FAKE_ASSET_URL, mockExoPlayer);
+
+    TextureVideoPlayer videoPlayer =
+        TextureVideoPlayer.create(
+            mock(Context.class),
+            mockEvents,
+            mockProducer,
+            fakeVideoAsset,
+            new VideoPlayerOptions(),
+            7);
+
+    verify(mockExoPlayer, never()).setMediaItem(any());
+    verify(mockExoPlayer, never()).prepare();
+    verify(mockExoPlayer, never()).setVolume(anyFloat());
+    verify(mockEvents, never()).onInitialized(anyInt(), anyInt(), anyLong(), anyInt());
+
+    videoPlayer.dispose();
+  }
+
+  @Test
+  public void createInitializesReadyWarmPlayerAfterSurfaceIsBound() {
+    when(mockExoPlayer.getPlaybackState()).thenReturn(Player.STATE_READY);
+    when(mockExoPlayer.getVideoSize()).thenReturn(new VideoSize(300, 200));
+    VideoPreloadCache.putWarmPlayerForTest(FAKE_ASSET_URL, mockExoPlayer);
+
+    TextureVideoPlayer videoPlayer =
+        TextureVideoPlayer.create(
+            mock(Context.class),
+            mockEvents,
+            mockProducer,
+            fakeVideoAsset,
+            new VideoPlayerOptions(),
+            7);
+
+    InOrder inOrder = inOrder(mockExoPlayer, mockEvents);
+    inOrder.verify(mockExoPlayer).setVideoSurface(any());
+    inOrder.verify(mockEvents).onInitialized(eq(300), eq(200), anyLong(), anyInt());
+
+    videoPlayer.dispose();
+  }
+
+  @Test
+  public void readyWarmPlayerWaitsForVideoSizeBeforeInitializing() {
+    when(mockExoPlayer.getPlaybackState()).thenReturn(Player.STATE_READY);
+    when(mockExoPlayer.getVideoSize()).thenReturn(new VideoSize(0, 0));
+    VideoPreloadCache.putWarmPlayerForTest(FAKE_ASSET_URL, mockExoPlayer);
+
+    TextureVideoPlayer videoPlayer =
+        TextureVideoPlayer.create(
+            mock(Context.class),
+            mockEvents,
+            mockProducer,
+            fakeVideoAsset,
+            new VideoPlayerOptions(),
+            7);
+
+    verify(mockEvents, never()).onInitialized(anyInt(), anyInt(), anyLong(), anyInt());
+    verify(mockExoPlayer).addListener(listenerCaptor.capture());
+    when(mockExoPlayer.getVideoSize()).thenReturn(new VideoSize(300, 200));
+
+    listenerCaptor.getValue().onVideoSizeChanged(new VideoSize(300, 200));
+
+    verify(mockEvents).onInitialized(eq(300), eq(200), anyLong(), anyInt());
+
+    videoPlayer.dispose();
   }
 }

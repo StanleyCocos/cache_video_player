@@ -3,11 +3,17 @@ package io.flutter.plugins.videoplayer;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.OptIn;
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.MimeTypes;
+import androidx.media3.common.PlaybackException;
+import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.database.StandaloneDatabaseProvider;
 import androidx.media3.datasource.DataSource;
@@ -21,35 +27,50 @@ import androidx.media3.datasource.cache.CacheKeyFactory;
 import androidx.media3.datasource.cache.CacheWriter;
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor;
 import androidx.media3.datasource.cache.SimpleCache;
+import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
 import java.io.File;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /** 视频预加载磁盘缓存。 */
 @OptIn(markerClass = UnstableApi.class)
-final class VideoPreloadCache {
+public final class VideoPreloadCache {
   static final long DEFAULT_PRELOAD_BYTES = 3L * 1024L * 1024L;
   static final long CACHE_MAX_BYTES = 200L * 1024L * 1024L;
   private static final int MAX_ACTIVE_PRELOADS = 2;
+  private static final int MAX_WARM_PLAYERS = 2;
+  private static final long WARM_RELEASE_DELAY_MS = 5_000L;
+  private static final long EFFECTIVE_PLAYBACK_BYTES = 512L * 1024L;
   private static final long CACHE_FRAGMENT_BYTES = 256L * 1024L;
   private static final int MAX_REMEMBERED_TITLES = 1000;
   private static final String TAG = "VideoLoad";
   private static final String UNTITLED = "未命名贴文";
   private static final Object LOCK = new Object();
   private static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(MAX_ACTIVE_PRELOADS);
+  private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
   @Nullable private static SimpleCache cache;
   private static final LinkedHashMap<String, ActivePreload> activePreloads = new LinkedHashMap<>();
   private static final LinkedHashSet<String> queuedUrls = new LinkedHashSet<>();
+  private static final LinkedHashSet<String> warmCandidateUrls = new LinkedHashSet<>();
+  private static final LinkedHashMap<String, WarmRequest> warmRequestsByUrl = new LinkedHashMap<>();
   private static final LinkedHashMap<String, Long> queuedPreloadBytesByUrl = new LinkedHashMap<>();
   private static final LinkedHashMap<String, String> titlesByUrl = new LinkedHashMap<>();
   private static final LinkedHashMap<Long, Long> playerStartMsById = new LinkedHashMap<>();
+  private static final LinkedHashMap<String, WarmPlayer> warmPlayers = new LinkedHashMap<>();
+  private static final LinkedHashMap<String, Runnable> pendingWarmReleaseTasks =
+      new LinkedHashMap<>();
+  private static long nextWarmPlayerId = -1L;
   private static boolean debugEnabled;
 
   private VideoPreloadCache() {}
@@ -109,7 +130,8 @@ final class VideoPreloadCache {
       @Nullable String title,
       long preloadBytes,
       @NonNull Map<String, String> httpHeaders,
-      @Nullable String userAgent) {
+      @Nullable String userAgent,
+      @NonNull VideoAsset.StreamingFormat streamingFormat) {
     String videoUrl = url == null ? "" : url.trim();
     if (videoUrl.isEmpty()) {
       return;
@@ -118,7 +140,7 @@ final class VideoPreloadCache {
     urls.add(videoUrl);
     LinkedHashMap<String, String> titles = new LinkedHashMap<>();
     titles.put(videoUrl, title == null ? "" : title);
-    syncQueue(context, urls, titles, preloadBytes, httpHeaders, userAgent);
+    syncQueue(context, urls, titles, preloadBytes, httpHeaders, userAgent, streamingFormat);
   }
 
   /** 同步当前可见视频预加载队列。 */
@@ -128,12 +150,14 @@ final class VideoPreloadCache {
       @NonNull Map<String, String> incomingTitlesByUrl,
       long preloadBytes,
       @NonNull Map<String, String> httpHeaders,
-      @Nullable String userAgent) {
+      @Nullable String userAgent,
+      @NonNull VideoAsset.StreamingFormat streamingFormat) {
     LinkedHashSet<String> visibleUrls = sanitizeUrls(urls);
     long requestedPreloadBytes = normalizePreloadBytes(preloadBytes);
     updateDebugEnabled(context);
     synchronized (LOCK) {
       rememberTitlesLocked(incomingTitlesByUrl);
+      setWarmCandidatesLocked(visibleUrls, httpHeaders, userAgent, streamingFormat);
       queuedUrls.clear();
       queuedPreloadBytesByUrl.clear();
       List<String> activeUrls = new ArrayList<>(activePreloads.keySet());
@@ -150,6 +174,8 @@ final class VideoPreloadCache {
         if (cachedBytes >= requestedPreloadBytes) {
           queuedUrls.remove(visibleUrl);
           queuedPreloadBytesByUrl.remove(visibleUrl);
+          maybeStartWarmLocked(
+              context, visibleUrl, requestedPreloadBytes, httpHeaders, userAgent, streamingFormat);
           continue;
         }
         if (activePreloads.containsKey(visibleUrl) || queuedUrls.contains(visibleUrl)) {
@@ -158,7 +184,7 @@ final class VideoPreloadCache {
         queuedUrls.add(visibleUrl);
         queuedPreloadBytesByUrl.put(visibleUrl, requestedPreloadBytes);
       }
-      startNextLocked(context, httpHeaders, userAgent);
+      startNextLocked(context, httpHeaders, userAgent, streamingFormat);
     }
   }
 
@@ -169,7 +195,8 @@ final class VideoPreloadCache {
       @Nullable String title,
       long preloadBytes,
       @NonNull Map<String, String> httpHeaders,
-      @Nullable String userAgent) {
+      @Nullable String userAgent,
+      @NonNull VideoAsset.StreamingFormat streamingFormat) {
     String videoUrl = url == null ? "" : url.trim();
     if (videoUrl.isEmpty()) {
       return;
@@ -181,8 +208,12 @@ final class VideoPreloadCache {
       long cachedBytes = cachedBytes(context, videoUrl, requestedPreloadBytes);
       logCacheStateLocked(videoUrl, cachedBytes);
       if (cachedBytes >= Math.min(512L * 1024L, requestedPreloadBytes)) {
+        setWarmCandidatesLocked(videoUrl, httpHeaders, userAgent, streamingFormat);
+        releaseWarmPlayersExceptLocked(videoUrl, "点击切换");
         return;
       }
+      setWarmCandidatesLocked(videoUrl, httpHeaders, userAgent, streamingFormat);
+      releaseWarmPlayersExceptLocked(videoUrl, "点击切换");
       queuedUrls.clear();
       queuedPreloadBytesByUrl.clear();
       List<String> activeUrls = new ArrayList<>(activePreloads.keySet());
@@ -199,12 +230,20 @@ final class VideoPreloadCache {
     synchronized (LOCK) {
       queuedUrls.clear();
       cancelAllActiveLocked(reason);
+      clearWarmCandidatesLocked(reason);
     }
   }
 
   /** 清空当前预加载队列。 */
   static void clear(@NonNull String reason) {
     cancel(reason);
+  }
+
+  /** 释放所有预热播放器。 */
+  static void clearWarmPlayers(@NonNull String reason) {
+    synchronized (LOCK) {
+      clearWarmCandidatesLocked(reason);
+    }
   }
 
   /** 查询首段缓存字节数。 */
@@ -222,10 +261,126 @@ final class VideoPreloadCache {
     return bytes;
   }
 
+  /** 取出已经预热完成的播放器。 */
+  @Nullable
+  public static ExoPlayer takeWarmPlayer(@NonNull VideoAsset asset) {
+    String videoUrl = warmKeyFromMediaItem(asset.getMediaItem());
+    if (videoUrl.isEmpty()) {
+      return null;
+    }
+    return takeWarmPlayer(
+        new WarmRequest(
+            videoUrl,
+            asset.getStreamingFormat(),
+            new HashMap<>(asset.getHttpHeaders()),
+            asset.getUserAgent()));
+  }
+
+  /** 取出已经预热完成的播放器。 */
+  @Nullable
+  public static ExoPlayer takeWarmPlayer(@NonNull MediaItem mediaItem) {
+    String videoUrl = warmKeyFromMediaItem(mediaItem);
+    if (videoUrl.isEmpty()) {
+      return null;
+    }
+    return takeWarmPlayer(
+        new WarmRequest(
+            videoUrl,
+            VideoAsset.StreamingFormat.UNKNOWN,
+            new HashMap<>(),
+            null));
+  }
+
+  @Nullable
+  private static ExoPlayer takeWarmPlayer(@NonNull WarmRequest requestedRequest) {
+    String videoUrl = requestedRequest.url;
+    synchronized (LOCK) {
+      Runnable pendingRelease = pendingWarmReleaseTasks.remove(videoUrl);
+      if (pendingRelease != null) {
+        MAIN_HANDLER.removeCallbacks(pendingRelease);
+      }
+      WarmPlayer warmPlayer = warmPlayers.remove(videoUrl);
+      if (warmPlayer == null
+          || warmPlayer.player == null
+          || !warmPlayer.ready
+          || !isWarmRequestCompatible(requestedRequest, warmPlayer.request)) {
+        if (warmPlayer != null) {
+          forgetPlayerStart(warmPlayer.playerId);
+          ExoPlayer player = warmPlayer.player;
+          if (player != null) {
+            if (warmPlayer.listener != null) {
+              player.removeListener(warmPlayer.listener);
+            }
+            MAIN_HANDLER.post(player::release);
+          }
+        }
+        logWarmEventLocked(videoUrl, "warm miss");
+        return null;
+      }
+      forgetPlayerStart(warmPlayer.playerId);
+      if (warmPlayer.listener != null) {
+        warmPlayer.player.removeListener(warmPlayer.listener);
+      }
+      logWarmEventLocked(videoUrl, "warm 命中");
+      return warmPlayer.player;
+    }
+  }
+
+  @NonNull
+  private static String warmKeyFromMediaItem(@NonNull MediaItem mediaItem) {
+    String url =
+        mediaItem.localConfiguration == null
+            ? ""
+            : mediaItem.localConfiguration.uri.toString().trim();
+    return url.isEmpty() ? mediaItem.mediaId.trim() : url;
+  }
+
+  private static boolean isWarmMediaItemCompatible(
+      @NonNull MediaItem requestedMediaItem, @NonNull MediaItem warmMediaItem) {
+    String requestedMimeType =
+        requestedMediaItem.localConfiguration == null
+            ? null
+            : requestedMediaItem.localConfiguration.mimeType;
+    String warmMimeType =
+        warmMediaItem.localConfiguration == null ? null : warmMediaItem.localConfiguration.mimeType;
+    return requestedMimeType == null || requestedMimeType.equals(warmMimeType);
+  }
+
+  private static boolean isWarmRequestCompatible(
+      @NonNull WarmRequest requestedRequest, @NonNull WarmRequest warmRequest) {
+    return requestedRequest.httpHeaders.equals(warmRequest.httpHeaders)
+        && Objects.equals(requestedRequest.userAgent, warmRequest.userAgent)
+        && isWarmMediaItemCompatible(warmMediaItem(requestedRequest), warmMediaItem(warmRequest));
+  }
+
+  @NonNull
+  private static MediaItem warmMediaItem(@NonNull WarmRequest warmRequest) {
+    MediaItem.Builder builder = new MediaItem.Builder().setUri(warmRequest.url);
+    String mimeType = null;
+    switch (warmRequest.streamingFormat) {
+      case SMOOTH:
+        mimeType = MimeTypes.APPLICATION_SS;
+        break;
+      case DYNAMIC_ADAPTIVE:
+        mimeType = MimeTypes.APPLICATION_MPD;
+        break;
+      case HTTP_LIVE:
+        mimeType = MimeTypes.APPLICATION_M3U8;
+        break;
+      case UNKNOWN:
+        break;
+    }
+    if (mimeType != null) {
+      builder.setMimeType(mimeType);
+    }
+    return builder.build();
+  }
+
   private static void preloadOnExecutor(
       @NonNull Context context,
       @NonNull Map<String, String> httpHeaders,
       @Nullable String userAgent,
+      @NonNull VideoAsset.StreamingFormat streamingFormat,
       @NonNull ActivePreload activePreload) {
     String url = activePreload.url;
     long preloadBytes = activePreload.preloadBytes;
@@ -247,13 +402,16 @@ final class VideoPreloadCache {
       writer.cache();
       logPreloadFinished(
           url, cachedBytes(context, url, preloadBytes), activePreload.elapsedMs());
+      synchronized (LOCK) {
+        maybeStartWarmLocked(context, url, preloadBytes, httpHeaders, userAgent, streamingFormat);
+      }
     } catch (InterruptedIOException ignored) {
     } catch (IOException error) {
     } finally {
       synchronized (LOCK) {
         if (activePreloads.get(url) == activePreload) {
           activePreloads.remove(url);
-          startNextLocked(context, httpHeaders, userAgent);
+          startNextLocked(context, httpHeaders, userAgent, streamingFormat);
         }
       }
     }
@@ -262,7 +420,8 @@ final class VideoPreloadCache {
   private static void startNextLocked(
       @NonNull Context context,
       @NonNull Map<String, String> httpHeaders,
-      @Nullable String userAgent) {
+      @Nullable String userAgent,
+      @NonNull VideoAsset.StreamingFormat streamingFormat) {
     while (activePreloads.size() < MAX_ACTIVE_PRELOADS) {
       String nextUrl = pollNextUncachedLocked(context);
       if (nextUrl == null) {
@@ -272,8 +431,247 @@ final class VideoPreloadCache {
       ActivePreload activePreload = new ActivePreload(nextUrl, preloadBytes);
       activePreloads.put(nextUrl, activePreload);
       logPreloadStarted(nextUrl);
-      EXECUTOR.execute(() -> preloadOnExecutor(context, httpHeaders, userAgent, activePreload));
+      EXECUTOR.execute(
+          () -> preloadOnExecutor(context, httpHeaders, userAgent, streamingFormat, activePreload));
     }
+  }
+
+  private static void setWarmCandidatesLocked(
+      @NonNull LinkedHashSet<String> urls,
+      @NonNull Map<String, String> httpHeaders,
+      @Nullable String userAgent,
+      @NonNull VideoAsset.StreamingFormat streamingFormat) {
+    LinkedHashSet<String> nextCandidates = new LinkedHashSet<>();
+    for (String url : urls) {
+      if (nextCandidates.size() >= MAX_WARM_PLAYERS) {
+        break;
+      }
+      nextCandidates.add(url);
+      WarmRequest nextRequest =
+          new WarmRequest(
+              url,
+              streamingFormatForUrl(url, streamingFormat),
+              new HashMap<>(httpHeaders),
+              userAgent);
+      warmRequestsByUrl.put(url, nextRequest);
+      WarmPlayer warmPlayer = warmPlayers.get(url);
+      if (warmPlayer != null && !isWarmRequestCompatible(nextRequest, warmPlayer.request)) {
+        releaseWarmPlayerLocked(url, "配置变化");
+      }
+    }
+    warmCandidateUrls.clear();
+    warmCandidateUrls.addAll(nextCandidates);
+    warmRequestsByUrl.keySet().retainAll(nextCandidates);
+    for (String url : nextCandidates) {
+      Runnable pendingRelease = pendingWarmReleaseTasks.remove(url);
+      if (pendingRelease != null) {
+        MAIN_HANDLER.removeCallbacks(pendingRelease);
+      }
+    }
+    List<String> warmedUrls = new ArrayList<>(warmPlayers.keySet());
+    for (String url : warmedUrls) {
+      if (!nextCandidates.contains(url)) {
+        scheduleWarmReleaseLocked(url, "离开候选");
+      }
+    }
+  }
+
+  private static void setWarmCandidatesLocked(
+      @NonNull String url,
+      @NonNull Map<String, String> httpHeaders,
+      @Nullable String userAgent,
+      @NonNull VideoAsset.StreamingFormat streamingFormat) {
+    LinkedHashSet<String> urls = new LinkedHashSet<>();
+    urls.add(url);
+    setWarmCandidatesLocked(urls, httpHeaders, userAgent, streamingFormat);
+  }
+
+  private static void clearWarmCandidatesLocked(@NonNull String reason) {
+    warmCandidateUrls.clear();
+    warmRequestsByUrl.clear();
+    releaseAllWarmPlayersLocked(reason);
+  }
+
+  @NonNull
+  private static VideoAsset.StreamingFormat streamingFormatForUrl(
+      @NonNull String url, @NonNull VideoAsset.StreamingFormat streamingFormat) {
+    if (streamingFormat != VideoAsset.StreamingFormat.UNKNOWN) {
+      return streamingFormat;
+    }
+    String normalizedUrl = url.toLowerCase();
+    int queryStart = normalizedUrl.indexOf('?');
+    if (queryStart >= 0) {
+      normalizedUrl = normalizedUrl.substring(0, queryStart);
+    }
+    if (normalizedUrl.endsWith(".m3u8")) {
+      return VideoAsset.StreamingFormat.HTTP_LIVE;
+    }
+    if (normalizedUrl.endsWith(".mpd")) {
+      return VideoAsset.StreamingFormat.DYNAMIC_ADAPTIVE;
+    }
+    if (normalizedUrl.endsWith(".ism") || normalizedUrl.endsWith(".isml")) {
+      return VideoAsset.StreamingFormat.SMOOTH;
+    }
+    return VideoAsset.StreamingFormat.UNKNOWN;
+  }
+
+  private static boolean isWarmable(@NonNull WarmRequest warmRequest) {
+    if (warmRequest.streamingFormat != VideoAsset.StreamingFormat.UNKNOWN) {
+      return true;
+    }
+    String url = warmRequest.url.toLowerCase();
+    int queryStart = url.indexOf('?');
+    if (queryStart >= 0) {
+      url = url.substring(0, queryStart);
+    }
+    return url.endsWith(".mp4") || url.endsWith(".m4v") || url.endsWith(".mov");
+  }
+
+  private static void maybeStartWarmLocked(
+      @NonNull Context context,
+      @NonNull String url,
+      long preloadBytes,
+      @NonNull Map<String, String> httpHeaders,
+      @Nullable String userAgent,
+      @NonNull VideoAsset.StreamingFormat streamingFormat) {
+    WarmRequest warmRequest =
+        warmRequestsByUrl.getOrDefault(
+            url,
+            new WarmRequest(
+                url,
+                streamingFormatForUrl(url, streamingFormat),
+                new HashMap<>(httpHeaders),
+                userAgent));
+    if (!warmCandidateUrls.contains(url)
+        || warmPlayers.containsKey(url)
+        || !isWarmable(warmRequest)
+        || cachedBytes(context, url, preloadBytes) < Math.min(EFFECTIVE_PLAYBACK_BYTES, preloadBytes)) {
+      return;
+    }
+    long playerId = nextWarmPlayerId--;
+    WarmPlayer warmPlayer = new WarmPlayer(warmRequest, playerId);
+    warmPlayers.put(url, warmPlayer);
+    logWarmEventLocked(url, "warm 开始");
+    MAIN_HANDLER.post(() -> createWarmPlayer(context, warmPlayer));
+  }
+
+  private static void createWarmPlayer(
+      @NonNull Context context,
+      @NonNull WarmPlayer warmPlayer) {
+    synchronized (LOCK) {
+      if (warmPlayers.get(warmPlayer.request.url) != warmPlayer) {
+        return;
+      }
+      rememberPlayerStart(warmPlayer.playerId, warmPlayer.startedMs);
+    }
+    ExoPlayer player = null;
+    try {
+      DefaultTrackSelector trackSelector = new DefaultTrackSelector(context);
+      player =
+          new ExoPlayer.Builder(context)
+              .setTrackSelector(trackSelector)
+              .setMediaSourceFactory(
+                  new DefaultMediaSourceFactory(context)
+                      .setDataSourceFactory(
+                          buildFactory(
+                              context,
+                              buildHttpFactory(
+                                  warmPlayer.request.httpHeaders, warmPlayer.request.userAgent),
+                              warmPlayer.playerId,
+                              warmPlayer.request.url,
+                              true)))
+              .build();
+      player.setVolume(0f);
+      player.setMediaItem(warmMediaItem(warmPlayer.request));
+      ExoPlayer finalPlayer = player;
+      Player.Listener listener =
+          new Player.Listener() {
+            @Override
+            public void onPlaybackStateChanged(int playbackState) {
+              if (playbackState == Player.STATE_READY) {
+                synchronized (LOCK) {
+                  if (warmPlayers.get(warmPlayer.request.url) == warmPlayer) {
+                    warmPlayer.ready = true;
+                    logWarmEventLocked(warmPlayer.request.url, "warm ready");
+                  }
+                }
+              }
+            }
+
+            @Override
+            public void onPlayerError(@NonNull PlaybackException error) {
+              Log.w(TAG, "warm error url=" + warmPlayer.request.url, error);
+              releaseWarmPlayer(warmPlayer.request.url, "warm error");
+            }
+          };
+      warmPlayer.listener = listener;
+      player.addListener(listener);
+      synchronized (LOCK) {
+        if (warmPlayers.get(warmPlayer.request.url) != warmPlayer) {
+          finalPlayer.release();
+          return;
+        }
+        warmPlayer.player = finalPlayer;
+      }
+      player.prepare();
+    } catch (RuntimeException | Error error) {
+      if (player != null) {
+        player.release();
+      }
+      Log.w(TAG, "warm failed url=" + warmPlayer.request.url, error);
+      releaseWarmPlayer(warmPlayer.request.url, "warm failed");
+    }
+  }
+
+  private static void scheduleWarmReleaseLocked(@NonNull String url, @NonNull String reason) {
+    if (!warmPlayers.containsKey(url) || pendingWarmReleaseTasks.containsKey(url)) {
+      return;
+    }
+    Runnable task = () -> releaseWarmPlayer(url, reason);
+    pendingWarmReleaseTasks.put(url, task);
+    MAIN_HANDLER.postDelayed(task, WARM_RELEASE_DELAY_MS);
+  }
+
+  private static void releaseWarmPlayersExceptLocked(@NonNull String keptUrl, @NonNull String reason) {
+    List<String> urls = new ArrayList<>(warmPlayers.keySet());
+    for (String url : urls) {
+      if (!keptUrl.equals(url)) {
+        releaseWarmPlayerLocked(url, reason);
+      }
+    }
+  }
+
+  private static void releaseAllWarmPlayersLocked(@NonNull String reason) {
+    List<String> urls = new ArrayList<>(warmPlayers.keySet());
+    for (String url : urls) {
+      releaseWarmPlayerLocked(url, reason);
+    }
+  }
+
+  private static void releaseWarmPlayer(@NonNull String url, @NonNull String reason) {
+    synchronized (LOCK) {
+      releaseWarmPlayerLocked(url, reason);
+    }
+  }
+
+  private static void releaseWarmPlayerLocked(@NonNull String url, @NonNull String reason) {
+    Runnable pendingRelease = pendingWarmReleaseTasks.remove(url);
+    if (pendingRelease != null) {
+      MAIN_HANDLER.removeCallbacks(pendingRelease);
+    }
+    WarmPlayer warmPlayer = warmPlayers.remove(url);
+    if (warmPlayer == null) {
+      return;
+    }
+    forgetPlayerStart(warmPlayer.playerId);
+    ExoPlayer player = warmPlayer.player;
+    if (player != null) {
+      if (warmPlayer.listener != null) {
+        player.removeListener(warmPlayer.listener);
+      }
+      MAIN_HANDLER.post(player::release);
+    }
+    logWarmEventLocked(url, "warm release " + reason);
   }
 
   @Nullable
@@ -466,7 +864,28 @@ final class VideoPreloadCache {
     }
   }
 
-  static long nowMs() {
+  private static void logWarmEventLocked(@NonNull String url, @NonNull String message) {
+    if (!debugEnabled) {
+      return;
+    }
+    Log.d(TAG, "《" + titleOfLocked(url) + "》" + message);
+  }
+
+  static void logWarmStateMismatch(@NonNull String url, int playbackState) {
+    if (!debugEnabled) {
+      return;
+    }
+    synchronized (LOCK) {
+      Log.d(
+          TAG,
+          "《"
+              + titleOfLocked(url)
+              + "》warm 接管状态不一致 state="
+              + playbackState);
+    }
+  }
+
+  public static long nowMs() {
     return SystemClock.elapsedRealtime();
   }
 
@@ -543,6 +962,137 @@ final class VideoPreloadCache {
     long elapsedMs() {
       return SystemClock.elapsedRealtime() - startedMs;
     }
+  }
+
+  private static final class WarmPlayer {
+    @NonNull final WarmRequest request;
+    final long playerId;
+    final long startedMs;
+    @Nullable ExoPlayer player;
+    @Nullable Player.Listener listener;
+    boolean ready;
+
+    WarmPlayer(@NonNull WarmRequest request, long playerId) {
+      this.request = request;
+      this.playerId = playerId;
+      startedMs = SystemClock.elapsedRealtime();
+    }
+  }
+
+  private static final class WarmRequest {
+    @NonNull final String url;
+    @NonNull final VideoAsset.StreamingFormat streamingFormat;
+    @NonNull final Map<String, String> httpHeaders;
+    @Nullable final String userAgent;
+
+    WarmRequest(
+        @NonNull String url,
+        @NonNull VideoAsset.StreamingFormat streamingFormat,
+        @NonNull Map<String, String> httpHeaders,
+        @Nullable String userAgent) {
+      this.url = url;
+      this.streamingFormat = streamingFormat;
+      this.httpHeaders = httpHeaders;
+      this.userAgent = userAgent;
+    }
+  }
+
+  static void setWarmCandidatesForTest(@NonNull String... urls) {
+    LinkedHashSet<String> candidates = new LinkedHashSet<>();
+    for (String url : urls) {
+      candidates.add(url);
+    }
+    synchronized (LOCK) {
+      setWarmCandidatesLocked(
+          candidates, new HashMap<>(), null, VideoAsset.StreamingFormat.UNKNOWN);
+    }
+  }
+
+  static int warmCandidateCountForTest() {
+    synchronized (LOCK) {
+      return warmCandidateUrls.size();
+    }
+  }
+
+  @Nullable
+  static String warmCandidateAtForTest(int index) {
+    synchronized (LOCK) {
+      return new ArrayList<>(warmCandidateUrls).get(index);
+    }
+  }
+
+  static void putWarmPlayerForTest(@NonNull String url, @NonNull ExoPlayer player) {
+    putWarmPlayerForTest(
+        url, player, VideoAsset.StreamingFormat.UNKNOWN, new HashMap<>(), null);
+  }
+
+  static void putWarmPlayerForTest(
+      @NonNull String url,
+      @NonNull ExoPlayer player,
+      @NonNull VideoAsset.StreamingFormat streamingFormat,
+      @NonNull Map<String, String> httpHeaders,
+      @Nullable String userAgent) {
+    synchronized (LOCK) {
+      WarmPlayer warmPlayer =
+          new WarmPlayer(
+              new WarmRequest(url, streamingFormat, new HashMap<>(httpHeaders), userAgent),
+              nextWarmPlayerId--);
+      warmPlayer.player = player;
+      warmPlayer.ready = true;
+      warmPlayers.put(url, warmPlayer);
+    }
+  }
+
+  static void putUnreadyWarmPlayerForTest(@NonNull String url) {
+    String videoUrl = warmKeyFromMediaItem(MediaItem.fromUri(url));
+    if (videoUrl.isEmpty()) {
+      videoUrl = url;
+    }
+    synchronized (LOCK) {
+      warmPlayers.put(
+          videoUrl,
+          new WarmPlayer(
+              new WarmRequest(videoUrl, VideoAsset.StreamingFormat.UNKNOWN, new HashMap<>(), null),
+              nextWarmPlayerId--));
+    }
+  }
+
+  static int warmPlayerCountForTest() {
+    synchronized (LOCK) {
+      return warmPlayers.size();
+    }
+  }
+
+  @Nullable
+  static ExoPlayer takeWarmPlayerForTest(@NonNull String url) {
+    return takeWarmPlayer(MediaItem.fromUri(url));
+  }
+
+  @Nullable
+  static ExoPlayer takeWarmPlayerByUrlForTest(@NonNull String url) {
+    synchronized (LOCK) {
+      WarmPlayer warmPlayer = warmPlayers.remove(url);
+      if (warmPlayer == null || warmPlayer.player == null || !warmPlayer.ready) {
+        return null;
+      }
+      return warmPlayer.player;
+    }
+  }
+
+  static void clearWarmPlayersForTest() {
+    synchronized (LOCK) {
+      warmCandidateUrls.clear();
+      for (Runnable task : pendingWarmReleaseTasks.values()) {
+        MAIN_HANDLER.removeCallbacks(task);
+      }
+      pendingWarmReleaseTasks.clear();
+      releaseAllWarmPlayersLocked("test");
+    }
+  }
+
+  static MediaItem warmMediaItemForTest(
+      @NonNull String url, @NonNull VideoAsset.StreamingFormat streamingFormat) {
+    return warmMediaItem(new WarmRequest(url, streamingFormat, new HashMap<>(), null));
   }
 
   private static final class LoggingDataSource implements DataSource {

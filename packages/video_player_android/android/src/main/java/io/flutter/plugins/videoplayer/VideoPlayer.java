@@ -35,6 +35,8 @@ public abstract class VideoPlayer implements VideoPlayerInstanceApi {
   @Nullable protected final SurfaceProducer surfaceProducer;
   @Nullable private DisposeHandler disposeHandler;
   @NonNull protected ExoPlayer exoPlayer;
+  @Nullable private ExoPlayerEventListener eventListener;
+  private boolean alreadyPrepared;
   // TODO: Migrate to stable API, see https://github.com/flutter/flutter/issues/147039.
   @UnstableApi @Nullable protected DefaultTrackSelector trackSelector;
 
@@ -47,6 +49,11 @@ public abstract class VideoPlayer implements VideoPlayerInstanceApi {
      */
     @NonNull
     ExoPlayer get();
+
+    /** Returns whether the player was already prepared before being handed to VideoPlayer. */
+    default boolean isAlreadyPrepared() {
+      return false;
+    }
   }
 
   /** A handler to run when dispose is called. */
@@ -84,15 +91,28 @@ public abstract class VideoPlayer implements VideoPlayerInstanceApi {
         trackSelector = (DefaultTrackSelector) exoPlayer.getTrackSelector();
       }
 
-      VideoPreloadCache.logPlayerTimeline(playerId, videoUrl, playerCreateStartMs, "setMediaItem 开始");
-      exoPlayer.setMediaItem(mediaItem);
-      VideoPreloadCache.logPlayerTimeline(playerId, videoUrl, playerCreateStartMs, "setMediaItem 结束");
-      exoPlayer.addListener(
+      alreadyPrepared = exoPlayerProvider.isAlreadyPrepared();
+      eventListener =
           createExoPlayerEventListener(
-              exoPlayer, surfaceProducer, playerId, videoUrl, playerCreateStartMs));
+              exoPlayer, surfaceProducer, playerId, videoUrl, playerCreateStartMs);
+      eventListener.setRequireValidInitializedData(alreadyPrepared);
+      if (!alreadyPrepared) {
+        VideoPreloadCache.logPlayerTimeline(playerId, videoUrl, playerCreateStartMs, "setMediaItem 开始");
+        exoPlayer.setMediaItem(mediaItem);
+        VideoPreloadCache.logPlayerTimeline(playerId, videoUrl, playerCreateStartMs, "setMediaItem 结束");
+      } else {
+        VideoPreloadCache.logPlayerTimeline(playerId, videoUrl, playerCreateStartMs, "复用预热播放器");
+      }
+      exoPlayer.addListener(eventListener);
       VideoPreloadCache.logPlayerTimeline(playerId, videoUrl, playerCreateStartMs, "addListener 结束");
-      VideoPreloadCache.logPlayerTimeline(playerId, videoUrl, playerCreateStartMs, "prepare 开始");
-      exoPlayer.prepare();
+      if (alreadyPrepared) {
+        if (exoPlayer.getPlaybackState() != Player.STATE_READY) {
+          VideoPreloadCache.logWarmStateMismatch(videoUrl, exoPlayer.getPlaybackState());
+        }
+      } else {
+        VideoPreloadCache.logPlayerTimeline(playerId, videoUrl, playerCreateStartMs, "prepare 开始");
+        exoPlayer.prepare();
+      }
       setAudioAttributes(exoPlayer, options.mixWithOthers);
     } catch (RuntimeException | Error error) {
       VideoPreloadCache.forgetPlayerStart(playerId);
@@ -111,6 +131,12 @@ public abstract class VideoPlayer implements VideoPlayerInstanceApi {
       long playerId,
       @NonNull String videoUrl,
       long playerCreateStartMs);
+
+  protected void maybeSendInitializedForWarmPlayer() {
+    if (alreadyPrepared && eventListener != null) {
+      eventListener.maybeSendInitializedIfReady();
+    }
+  }
 
   private static void setAudioAttributes(ExoPlayer exoPlayer, boolean isMixMode) {
     exoPlayer.setAudioAttributes(

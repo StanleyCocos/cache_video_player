@@ -58,6 +58,24 @@ final class HttpVideoAsset extends VideoAsset {
 
   @NonNull
   @Override
+  StreamingFormat getStreamingFormat() {
+    return streamingFormat;
+  }
+
+  @NonNull
+  @Override
+  Map<String, String> getHttpHeaders() {
+    return httpHeaders;
+  }
+
+  @Nullable
+  @Override
+  String getUserAgent() {
+    return userAgent;
+  }
+
+  @NonNull
+  @Override
   public MediaSource.Factory getMediaSourceFactory(@NonNull Context context, long playerId) {
     return getMediaSourceFactory(context, new DefaultHttpDataSource.Factory(), playerId);
   }
@@ -71,6 +89,12 @@ final class HttpVideoAsset extends VideoAsset {
    * @param initialFactory initial factory, to be configured.
    * @return configured factory, or {@code null} if not needed for this asset type.
    */
+  @VisibleForTesting
+  MediaSource.Factory getMediaSourceFactory(
+      Context context, DefaultHttpDataSource.Factory initialFactory) {
+    return getMediaSourceFactory(context, initialFactory, 0);
+  }
+
   @VisibleForTesting
   MediaSource.Factory getMediaSourceFactory(
       Context context, DefaultHttpDataSource.Factory initialFactory, long playerId) {

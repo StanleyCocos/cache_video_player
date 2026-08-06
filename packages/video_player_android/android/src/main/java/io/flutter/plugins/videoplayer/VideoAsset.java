@@ -8,7 +8,9 @@ import android.content.Context;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.media3.common.MediaItem;
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.source.MediaSource;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -73,6 +75,21 @@ public abstract class VideoAsset {
   @NonNull
   public abstract MediaItem getMediaItem();
 
+  @NonNull
+  StreamingFormat getStreamingFormat() {
+    return StreamingFormat.UNKNOWN;
+  }
+
+  @NonNull
+  Map<String, String> getHttpHeaders() {
+    return Collections.emptyMap();
+  }
+
+  @Nullable
+  String getUserAgent() {
+    return null;
+  }
+
   /**
    * Returns the configured media source factory, if needed for this asset type.
    *
@@ -80,7 +97,14 @@ public abstract class VideoAsset {
    * @return configured factory, or {@code null} if not needed for this asset type.
    */
   @NonNull
-  public abstract MediaSource.Factory getMediaSourceFactory(@NonNull Context context, long playerId);
+  public MediaSource.Factory getMediaSourceFactory(@NonNull Context context) {
+    return new DefaultMediaSourceFactory(context);
+  }
+
+  @NonNull
+  public MediaSource.Factory getMediaSourceFactory(@NonNull Context context, long playerId) {
+    return getMediaSourceFactory(context);
+  }
 
   /** Streaming formats that can be provided to the video player as a hint. */
   enum StreamingFormat {

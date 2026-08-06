@@ -16,6 +16,7 @@ import io.flutter.plugins.videoplayer.VideoAsset;
 import io.flutter.plugins.videoplayer.VideoPlayer;
 import io.flutter.plugins.videoplayer.VideoPlayerCallbacks;
 import io.flutter.plugins.videoplayer.VideoPlayerOptions;
+import io.flutter.plugins.videoplayer.VideoPreloadCache;
 import io.flutter.view.TextureRegistry.SurfaceProducer;
 
 /**
@@ -33,6 +34,7 @@ public class PlatformViewVideoPlayer extends VideoPlayer {
       long playerId,
       @NonNull ExoPlayerProvider exoPlayerProvider) {
     super(events, mediaItem, options, playerId, /* surfaceProducer */ null, exoPlayerProvider);
+    maybeSendInitializedForWarmPlayer();
   }
 
   /**
@@ -51,21 +53,45 @@ public class PlatformViewVideoPlayer extends VideoPlayer {
       @NonNull Context context,
       @NonNull VideoPlayerCallbacks events,
       @NonNull VideoAsset asset,
+      @NonNull VideoPlayerOptions options) {
+    return create(context, events, asset, options, 0);
+  }
+
+  // TODO: Migrate to stable API, see https://github.com/flutter/flutter/issues/147039.
+  @UnstableApi
+  @NonNull
+  public static PlatformViewVideoPlayer create(
+      @NonNull Context context,
+      @NonNull VideoPlayerCallbacks events,
+      @NonNull VideoAsset asset,
       @NonNull VideoPlayerOptions options,
       long playerId) {
+    ExoPlayer warmPlayer = VideoPreloadCache.takeWarmPlayer(asset);
     return new PlatformViewVideoPlayer(
         events,
         asset.getMediaItem(),
         options,
         playerId,
-        () -> {
-          androidx.media3.exoplayer.trackselection.DefaultTrackSelector trackSelector =
-              new androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context);
-          ExoPlayer.Builder builder =
-              new ExoPlayer.Builder(context)
-                  .setTrackSelector(trackSelector)
-                  .setMediaSourceFactory(asset.getMediaSourceFactory(context, playerId));
-          return builder.build();
+        new VideoPlayer.ExoPlayerProvider() {
+          @Override
+          @NonNull
+          public ExoPlayer get() {
+            if (warmPlayer != null) {
+              return warmPlayer;
+            }
+            androidx.media3.exoplayer.trackselection.DefaultTrackSelector trackSelector =
+                new androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context);
+            ExoPlayer.Builder builder =
+                new ExoPlayer.Builder(context)
+                    .setTrackSelector(trackSelector)
+                    .setMediaSourceFactory(asset.getMediaSourceFactory(context, playerId));
+            return builder.build();
+          }
+
+          @Override
+          public boolean isAlreadyPrepared() {
+            return warmPlayer != null;
+          }
         });
   }
 

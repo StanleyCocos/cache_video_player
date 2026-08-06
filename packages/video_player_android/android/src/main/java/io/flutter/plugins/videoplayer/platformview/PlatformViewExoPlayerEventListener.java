@@ -11,9 +11,16 @@ import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.ExoPlayer;
 import io.flutter.plugins.videoplayer.ExoPlayerEventListener;
 import io.flutter.plugins.videoplayer.VideoPlayerCallbacks;
+import io.flutter.plugins.videoplayer.VideoPreloadCache;
 import java.util.Objects;
 
 public final class PlatformViewExoPlayerEventListener extends ExoPlayerEventListener {
+  public PlatformViewExoPlayerEventListener(
+      @NonNull ExoPlayer exoPlayer,
+      @NonNull VideoPlayerCallbacks events) {
+    this(exoPlayer, events, 0, "", VideoPreloadCache.nowMs());
+  }
+
   public PlatformViewExoPlayerEventListener(
       @NonNull ExoPlayer exoPlayer,
       @NonNull VideoPlayerCallbacks events,
@@ -21,6 +28,13 @@ public final class PlatformViewExoPlayerEventListener extends ExoPlayerEventList
       @NonNull String videoUrl,
       long playerCreateStartMs) {
     super(exoPlayer, events, playerId, videoUrl, playerCreateStartMs);
+  }
+
+  @OptIn(markerClass = UnstableApi.class)
+  @Override
+  protected boolean canSendInitialized() {
+    Format videoFormat = exoPlayer.getVideoFormat();
+    return videoFormat != null && videoFormat.width > 0 && videoFormat.height > 0;
   }
 
   @OptIn(markerClass = UnstableApi.class)

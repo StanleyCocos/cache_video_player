@@ -10,10 +10,12 @@ import androidx.media3.common.C;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.Tracks;
+import androidx.media3.common.VideoSize;
 import androidx.media3.exoplayer.ExoPlayer;
 
 public abstract class ExoPlayerEventListener implements Player.Listener {
   private boolean isInitialized = false;
+  private boolean requireValidInitializedData = false;
   protected final ExoPlayer exoPlayer;
   protected final VideoPlayerCallbacks events;
   private final long playerId;
@@ -61,6 +63,20 @@ public abstract class ExoPlayerEventListener implements Player.Listener {
 
   protected abstract void sendInitialized();
 
+  protected boolean canSendInitialized() {
+    return true;
+  }
+
+  public void setRequireValidInitializedData(boolean requireValidInitializedData) {
+    this.requireValidInitializedData = requireValidInitializedData;
+  }
+
+  public ExoPlayerEventListener(
+      @NonNull ExoPlayer exoPlayer,
+      @NonNull VideoPlayerCallbacks events) {
+    this(exoPlayer, events, 0, "", VideoPreloadCache.nowMs());
+  }
+
   @Override
   public void onPlaybackStateChanged(final int playbackState) {
     PlatformPlaybackState platformState = PlatformPlaybackState.UNKNOWN;
@@ -72,16 +88,7 @@ public abstract class ExoPlayerEventListener implements Player.Listener {
       case Player.STATE_READY:
         platformState = PlatformPlaybackState.READY;
         logTimeline("STATE_READY");
-        if (!isInitialized) {
-          isInitialized = true;
-          long sendInitializedStartMs = VideoPreloadCache.nowMs();
-          logTimeline("sendInitialized 开始");
-          sendInitialized();
-          logTimeline(
-              "sendInitialized 结束 cost="
-                  + (VideoPreloadCache.nowMs() - sendInitializedStartMs)
-                  + "ms");
-        }
+        maybeSendInitializedIfReady();
         break;
       case Player.STATE_ENDED:
         platformState = PlatformPlaybackState.ENDED;
@@ -119,6 +126,11 @@ public abstract class ExoPlayerEventListener implements Player.Listener {
   }
 
   @Override
+  public void onVideoSizeChanged(@NonNull VideoSize videoSize) {
+    maybeSendInitializedIfReady();
+  }
+
+  @Override
   public void onTracksChanged(@NonNull Tracks tracks) {
     // Find the currently selected audio track and notify
     String selectedTrackId = findSelectedAudioTrackId(tracks);
@@ -150,5 +162,21 @@ public abstract class ExoPlayerEventListener implements Player.Listener {
 
   private void logTimeline(@NonNull String message) {
     VideoPreloadCache.logPlayerTimeline(playerId, videoUrl, playerCreateStartMs, message);
+  }
+
+  public void maybeSendInitializedIfReady() {
+    if (isInitialized
+        || exoPlayer.getPlaybackState() != Player.STATE_READY
+        || (requireValidInitializedData && !canSendInitialized())) {
+      return;
+    }
+    isInitialized = true;
+    long sendInitializedStartMs = VideoPreloadCache.nowMs();
+    logTimeline("sendInitialized 开始");
+    sendInitialized();
+    logTimeline(
+        "sendInitialized 结束 cost="
+            + (VideoPreloadCache.nowMs() - sendInitializedStartMs)
+            + "ms");
   }
 }

@@ -12,12 +12,14 @@ import android.util.LongSparseArray;
 import androidx.media3.common.MediaItem;
 import androidx.media3.exoplayer.ExoPlayer;
 import io.flutter.embedding.engine.plugins.FlutterPlugin;
+import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.platform.PlatformViewRegistry;
 import io.flutter.plugins.videoplayer.platformview.PlatformVideoViewFactory;
 import io.flutter.plugins.videoplayer.platformview.PlatformViewVideoPlayer;
 import io.flutter.plugins.videoplayer.texture.TextureVideoPlayer;
 import io.flutter.view.TextureRegistry;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import org.junit.Before;
@@ -65,6 +67,15 @@ public class VideoPlayerPluginTest {
     return (LinkedHashMap<Long, Long>) field.get(null);
   }
 
+  private VideoAsset.StreamingFormat streamingFormatArgument(Object formatHint) throws Exception {
+    Method method =
+        VideoPlayerPlugin.class.getDeclaredMethod("streamingFormatArgument", MethodCall.class);
+    method.setAccessible(true);
+    HashMap<String, Object> arguments = new HashMap<>();
+    arguments.put("formatHint", formatHint);
+    return (VideoAsset.StreamingFormat) method.invoke(null, new MethodCall("preload", arguments));
+  }
+
   // This is only a placeholder test and doesn't actually initialize the plugin.
   @Test
   public void initPluginDoesNotThrow() {
@@ -83,7 +94,7 @@ public class VideoPlayerPluginTest {
     try (MockedStatic<PlatformViewVideoPlayer> mockedPlatformViewVideoPlayerStatic =
         mockStatic(PlatformViewVideoPlayer.class)) {
       mockedPlatformViewVideoPlayerStatic
-          .when(() -> PlatformViewVideoPlayer.create(any(), any(), any(), any()))
+          .when(() -> PlatformViewVideoPlayer.create(any(), any(), any(), any(), anyLong()))
           .thenReturn(mock(PlatformViewVideoPlayer.class));
 
       final CreationOptions options =
@@ -105,7 +116,7 @@ public class VideoPlayerPluginTest {
     try (MockedStatic<TextureVideoPlayer> mockedTextureVideoPlayerStatic =
         mockStatic(TextureVideoPlayer.class)) {
       mockedTextureVideoPlayerStatic
-          .when(() -> TextureVideoPlayer.create(any(), any(), any(), any(), any()))
+          .when(() -> TextureVideoPlayer.create(any(), any(), any(), any(), any(), anyLong()))
           .thenReturn(mock(TextureVideoPlayer.class));
 
       final CreationOptions options =
@@ -164,5 +175,19 @@ public class VideoPlayerPluginTest {
             });
 
     assertFalse(getPlayerStartMsById().containsKey(playerId));
+  }
+
+  @Test
+  public void streamingFormatArgumentAcceptsStringHints() throws Exception {
+    assertEquals(VideoAsset.StreamingFormat.HTTP_LIVE, streamingFormatArgument("hls"));
+    assertEquals(VideoAsset.StreamingFormat.DYNAMIC_ADAPTIVE, streamingFormatArgument("dash"));
+    assertEquals(VideoAsset.StreamingFormat.SMOOTH, streamingFormatArgument("ss"));
+  }
+
+  @Test
+  public void streamingFormatArgumentAcceptsNumericHints() throws Exception {
+    assertEquals(VideoAsset.StreamingFormat.DYNAMIC_ADAPTIVE, streamingFormatArgument(0));
+    assertEquals(VideoAsset.StreamingFormat.HTTP_LIVE, streamingFormatArgument(1));
+    assertEquals(VideoAsset.StreamingFormat.SMOOTH, streamingFormatArgument(2));
   }
 }

@@ -84,11 +84,13 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
     // be replaced with just asserting that videoPlayers.isEmpty().
     // https://github.com/flutter/flutter/issues/20989 tracks this.
     disposeAllPlayers();
+    VideoPreloadCache.clearWarmPlayers("destroy");
   }
 
   @Override
   public void initialize() {
     disposeAllPlayers();
+    VideoPreloadCache.clearWarmPlayers("initialize");
   }
 
   @OptIn(markerClass = UnstableApi.class)
@@ -218,8 +220,9 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
             call.argument("url"),
             call.argument("title"),
             preloadBytesArgument(call),
-            Collections.emptyMap(),
-            null);
+            httpHeadersArgument(call),
+            call.argument("userAgent"),
+            streamingFormatArgument(call));
         result.success(null);
         break;
       case "syncQueue":
@@ -230,8 +233,9 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
             urls == null ? Collections.emptyList() : urls,
             titlesByUrl == null ? Collections.emptyMap() : titlesByUrl,
             preloadBytesArgument(call),
-            Collections.emptyMap(),
-            null);
+            httpHeadersArgument(call),
+            call.argument("userAgent"),
+            streamingFormatArgument(call));
         result.success(null);
         break;
       case "prioritize":
@@ -240,8 +244,9 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
             call.argument("url"),
             call.argument("title"),
             preloadBytesArgument(call),
-            Collections.emptyMap(),
-            null);
+            httpHeadersArgument(call),
+            call.argument("userAgent"),
+            streamingFormatArgument(call));
         result.success(null);
         break;
       case "clearQueue":
@@ -271,6 +276,42 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
   private static long preloadBytesArgument(@NonNull MethodCall call) {
     Number preloadBytes = call.argument("preloadBytes");
     return preloadBytes == null ? VideoPreloadCache.DEFAULT_PRELOAD_BYTES : preloadBytes.longValue();
+  }
+
+  @NonNull
+  private static Map<String, String> httpHeadersArgument(@NonNull MethodCall call) {
+    Map<String, String> httpHeaders = call.argument("httpHeaders");
+    return httpHeaders == null ? Collections.emptyMap() : httpHeaders;
+  }
+
+  @NonNull
+  private static VideoAsset.StreamingFormat streamingFormatArgument(@NonNull MethodCall call) {
+    Object formatHint = call.argument("formatHint");
+    if (formatHint == null) {
+      return VideoAsset.StreamingFormat.UNKNOWN;
+    }
+    if (formatHint instanceof Number) {
+      switch (((Number) formatHint).intValue()) {
+        case 0:
+          return VideoAsset.StreamingFormat.DYNAMIC_ADAPTIVE;
+        case 1:
+          return VideoAsset.StreamingFormat.HTTP_LIVE;
+        case 2:
+          return VideoAsset.StreamingFormat.SMOOTH;
+        default:
+          return VideoAsset.StreamingFormat.UNKNOWN;
+      }
+    }
+    switch (formatHint.toString().toLowerCase()) {
+      case "hls":
+        return VideoAsset.StreamingFormat.HTTP_LIVE;
+      case "dash":
+        return VideoAsset.StreamingFormat.DYNAMIC_ADAPTIVE;
+      case "ss":
+        return VideoAsset.StreamingFormat.SMOOTH;
+      default:
+        return VideoAsset.StreamingFormat.UNKNOWN;
+    }
   }
 
   private interface KeyForAssetFn {

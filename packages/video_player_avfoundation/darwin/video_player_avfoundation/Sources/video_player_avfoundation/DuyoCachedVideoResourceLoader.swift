@@ -106,7 +106,9 @@ final class DuyoCachedVideoResourceLoader: NSObject, AVAssetResourceLoaderDelega
     guard let load = loads.removeValue(forKey: ObjectIdentifier(loadingRequest)) else {
       return
     }
-    loadsByTaskIdentifier.removeValue(forKey: load.taskIdentifier)
+    if let taskIdentifier = load.taskIdentifier {
+      loadsByTaskIdentifier.removeValue(forKey: taskIdentifier)
+    }
     load.cancel()
   }
 

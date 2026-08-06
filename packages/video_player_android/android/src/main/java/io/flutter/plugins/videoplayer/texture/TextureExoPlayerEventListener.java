@@ -11,10 +11,24 @@ import androidx.media3.common.VideoSize;
 import androidx.media3.exoplayer.ExoPlayer;
 import io.flutter.plugins.videoplayer.ExoPlayerEventListener;
 import io.flutter.plugins.videoplayer.VideoPlayerCallbacks;
+import io.flutter.plugins.videoplayer.VideoPreloadCache;
 import java.util.Objects;
 
 public final class TextureExoPlayerEventListener extends ExoPlayerEventListener {
   private final boolean surfaceProducerHandlesCropAndRotation;
+
+  public TextureExoPlayerEventListener(
+      @NonNull ExoPlayer exoPlayer,
+      @NonNull VideoPlayerCallbacks events,
+      boolean surfaceProducerHandlesCropAndRotation) {
+    this(
+        exoPlayer,
+        events,
+        surfaceProducerHandlesCropAndRotation,
+        0,
+        "",
+        VideoPreloadCache.nowMs());
+  }
 
   public TextureExoPlayerEventListener(
       @NonNull ExoPlayer exoPlayer,
@@ -25,6 +39,12 @@ public final class TextureExoPlayerEventListener extends ExoPlayerEventListener 
       long playerCreateStartMs) {
     super(exoPlayer, events, playerId, videoUrl, playerCreateStartMs);
     this.surfaceProducerHandlesCropAndRotation = surfaceProducerHandlesCropAndRotation;
+  }
+
+  @Override
+  protected boolean canSendInitialized() {
+    VideoSize videoSize = exoPlayer.getVideoSize();
+    return videoSize.width > 0 && videoSize.height > 0;
   }
 
   @Override

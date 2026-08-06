@@ -18,6 +18,7 @@ import io.flutter.plugins.videoplayer.VideoAsset;
 import io.flutter.plugins.videoplayer.VideoPlayer;
 import io.flutter.plugins.videoplayer.VideoPlayerCallbacks;
 import io.flutter.plugins.videoplayer.VideoPlayerOptions;
+import io.flutter.plugins.videoplayer.VideoPreloadCache;
 import io.flutter.view.TextureRegistry.SurfaceProducer;
 
 /**
@@ -48,23 +49,60 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
       @NonNull VideoPlayerCallbacks events,
       @NonNull SurfaceProducer surfaceProducer,
       @NonNull VideoAsset asset,
+      @NonNull VideoPlayerOptions options) {
+    return create(context, events, surfaceProducer, asset, options, 0);
+  }
+
+  // TODO: Migrate to stable API, see https://github.com/flutter/flutter/issues/147039.
+  @UnstableApi
+  @NonNull
+  public static TextureVideoPlayer create(
+      @NonNull Context context,
+      @NonNull VideoPlayerCallbacks events,
+      @NonNull SurfaceProducer surfaceProducer,
+      @NonNull VideoAsset asset,
       @NonNull VideoPlayerOptions options,
       long playerId) {
+    ExoPlayer warmPlayer = VideoPreloadCache.takeWarmPlayer(asset);
     return new TextureVideoPlayer(
         events,
         surfaceProducer,
         asset.getMediaItem(),
         options,
         playerId,
-        () -> {
-          androidx.media3.exoplayer.trackselection.DefaultTrackSelector trackSelector =
-              new androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context);
-          ExoPlayer.Builder builder =
-              new ExoPlayer.Builder(context)
-                  .setTrackSelector(trackSelector)
-                  .setMediaSourceFactory(asset.getMediaSourceFactory(context, playerId));
-          return builder.build();
+        new VideoPlayer.ExoPlayerProvider() {
+          @Override
+          @NonNull
+          public ExoPlayer get() {
+            if (warmPlayer != null) {
+              return warmPlayer;
+            }
+            androidx.media3.exoplayer.trackselection.DefaultTrackSelector trackSelector =
+                new androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context);
+            ExoPlayer.Builder builder =
+                new ExoPlayer.Builder(context)
+                    .setTrackSelector(trackSelector)
+                    .setMediaSourceFactory(asset.getMediaSourceFactory(context, playerId));
+            return builder.build();
+          }
+
+          @Override
+          public boolean isAlreadyPrepared() {
+            return warmPlayer != null;
+          }
         });
+  }
+
+  // TODO: Migrate to stable API, see https://github.com/flutter/flutter/issues/147039.
+  @UnstableApi
+  @VisibleForTesting
+  public TextureVideoPlayer(
+      @NonNull VideoPlayerCallbacks events,
+      @NonNull SurfaceProducer surfaceProducer,
+      @NonNull MediaItem mediaItem,
+      @NonNull VideoPlayerOptions options,
+      @NonNull ExoPlayerProvider exoPlayerProvider) {
+    this(events, surfaceProducer, mediaItem, options, 0, exoPlayerProvider);
   }
 
   // TODO: Migrate to stable API, see https://github.com/flutter/flutter/issues/147039.
@@ -84,6 +122,7 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
     Surface surface = surfaceProducer.getSurface();
     this.exoPlayer.setVideoSurface(surface);
     needsSurface = surface == null;
+    maybeSendInitializedForWarmPlayer();
   }
 
   @NonNull
