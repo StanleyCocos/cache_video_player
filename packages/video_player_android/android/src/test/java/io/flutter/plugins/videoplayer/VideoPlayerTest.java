@@ -74,15 +74,20 @@ public final class VideoPlayerTest {
         @NonNull VideoPlayerOptions options,
         @Nullable SurfaceProducer surfaceProducer,
         @NonNull ExoPlayerProvider exoPlayerProvider) {
-      super(events, mediaItem, options, surfaceProducer, exoPlayerProvider);
+      super(events, mediaItem, options, 0, surfaceProducer, exoPlayerProvider);
     }
 
     @NonNull
     @Override
     protected ExoPlayerEventListener createExoPlayerEventListener(
-        @NonNull ExoPlayer exoPlayer, @Nullable SurfaceProducer surfaceProducer) {
+        @NonNull ExoPlayer exoPlayer,
+        @Nullable SurfaceProducer surfaceProducer,
+        long playerId,
+        @NonNull String videoUrl,
+        long playerCreateStartMs) {
       // Use platform view implementation for testing.
-      return new PlatformViewExoPlayerEventListener(exoPlayer, mockEvents);
+      return new PlatformViewExoPlayerEventListener(
+          exoPlayer, mockEvents, playerId, videoUrl, playerCreateStartMs);
     }
   }
 

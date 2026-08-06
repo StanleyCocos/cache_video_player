@@ -146,6 +146,9 @@
 }
 
 - (AVPlayer *)playerWithPlayerItem:(NSObject<FVPAVPlayerItem> *)playerItem {
+  if ([playerItem conformsToProtocol:@protocol(FVPAVPlayerItemWrapper)]) {
+    return [AVPlayer playerWithPlayerItem:((NSObject<FVPAVPlayerItemWrapper> *)playerItem).playerItem];
+  }
   // The default factory always vends FVPDefault* implementations, so it is safe to cast back.
   return [AVPlayer playerWithPlayerItem:((FVPDefaultAVPlayerItem *)playerItem).playerItem];
 }

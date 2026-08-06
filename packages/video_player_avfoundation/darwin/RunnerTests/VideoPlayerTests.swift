@@ -23,6 +23,80 @@ private let hlsAudioTestURI =
   "https://flutter.github.io/assets-for-api-docs/assets/videos/hls/bee_audio_only.m3u8"
 
 @MainActor struct VideoPlayerTests {
+  @Test func remoteVideoWithHeadersUsesNativeAVAsset() throws {
+    let avFactory = StubFVPAVFactory()
+    let videoPlayerPlugin = try createInitializedPlugin(avFactory: avFactory)
+
+    _ = try videoPlayerPlugin.createPlatformViewPlayer(
+      options: CreationOptions(
+        uri: mp4TestURI,
+        httpHeaders: ["Referer": "https://example.com"]))
+
+    #expect(avFactory.urlAssetCallCount == 1)
+    #expect(avFactory.lastURLAssetURL?.absoluteString == mp4TestURI)
+    let headers =
+      avFactory.lastURLAssetOptions?["AVURLAssetHTTPHeaderFieldsKey"] as? [String: String]
+    #expect(headers == ["Referer": "https://example.com"])
+  }
+
+  @Test func hlsVideoUsesNativeAVAsset() throws {
+    let avFactory = StubFVPAVFactory()
+    let videoPlayerPlugin = try createInitializedPlugin(avFactory: avFactory)
+
+    _ = try videoPlayerPlugin.createPlatformViewPlayer(
+      options: CreationOptions(uri: hlsTestURI, httpHeaders: [:]))
+
+    #expect(avFactory.urlAssetCallCount == 1)
+    #expect(avFactory.lastURLAssetURL?.absoluteString == hlsTestURI)
+  }
+
+  @Test func remoteVideoUsesNativeAVAsset() throws {
+    let avFactory = StubFVPAVFactory()
+    let videoPlayerPlugin = try createInitializedPlugin(avFactory: avFactory)
+
+    _ = try videoPlayerPlugin.createPlatformViewPlayer(
+      options: CreationOptions(uri: mp4TestURI, httpHeaders: [:]))
+
+    #expect(avFactory.urlAssetCallCount == 1)
+    #expect(avFactory.lastURLAssetURL?.absoluteString == mp4TestURI)
+  }
+
+  @Test func unknownPreloadLengthStaysUnknown() {
+    #expect(DuyoVideoPreloadCache.contentLength(response: nil, receivedBytes: 3_145_728) == nil)
+  }
+
+  @Test func rangePreloadLengthUsesContentRangeTotal() throws {
+    let response = try #require(
+      HTTPURLResponse(
+        url: URL(string: mp4TestURI)!,
+        statusCode: 206,
+        httpVersion: nil,
+        headerFields: ["Content-Range": "bytes 0-3145727/9999999"]))
+
+    #expect(DuyoVideoPreloadCache.contentLength(response: response) == 9_999_999)
+  }
+
+  @Test func ignoredRangePreloadLengthStaysUnknown() throws {
+    let response = try #require(
+      HTTPURLResponse(
+        url: URL(string: mp4TestURI)!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Length": "9999999"]))
+
+    #expect(DuyoVideoPreloadCache.contentLength(response: response) == nil)
+  }
+
+  @Test func partialPreloadWithoutContentRangeStaysUnknown() throws {
+    let response = try #require(
+      HTTPURLResponse(
+        url: URL(string: mp4TestURI)!,
+        statusCode: 206,
+        httpVersion: nil,
+        headerFields: ["Content-Length": "3145728"]))
+
+    #expect(DuyoVideoPreloadCache.contentLength(response: response) == nil)
+  }
 
   @Test func blankVideoBugWithEncryptedVideoStreamAndInvertedAspectRatioBugForSomeVideoStream()
     throws

@@ -200,6 +200,9 @@ final class StubFVPAVFactory: NSObject, FVPAVFactory {
   let player: AVPlayer
   let playerItem: FVPAVPlayerItem
   let pixelBufferSource: FVPPixelBufferSource?
+  private(set) var urlAssetCallCount = 0
+  private(set) var lastURLAssetURL: URL?
+  private(set) var lastURLAssetOptions: [String: Any]?
   private(set) var lastOutputSettings: [String: Any]?
   #if os(iOS)
     var audioSession: FVPAVAudioSession
@@ -223,6 +226,9 @@ final class StubFVPAVFactory: NSObject, FVPAVFactory {
   }
 
   func urlAsset(with url: URL, options: [String: Any]?) -> FVPAVAsset {
+    urlAssetCallCount += 1
+    lastURLAssetURL = url
+    lastURLAssetOptions = options
     return playerItem.asset
   }
 

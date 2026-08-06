@@ -89,14 +89,23 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
   @NonNull
   @Override
   protected ExoPlayerEventListener createExoPlayerEventListener(
-      @NonNull ExoPlayer exoPlayer, @Nullable SurfaceProducer surfaceProducer) {
+      @NonNull ExoPlayer exoPlayer,
+      @Nullable SurfaceProducer surfaceProducer,
+      long playerId,
+      @NonNull String videoUrl,
+      long playerCreateStartMs) {
     if (surfaceProducer == null) {
       throw new IllegalArgumentException(
           "surfaceProducer cannot be null to create an ExoPlayerEventListener for TextureVideoPlayer.");
     }
     boolean surfaceProducerHandlesCropAndRotation = surfaceProducer.handlesCropAndRotation();
     return new TextureExoPlayerEventListener(
-        exoPlayer, videoPlayerEvents, surfaceProducerHandlesCropAndRotation);
+        exoPlayer,
+        videoPlayerEvents,
+        surfaceProducerHandlesCropAndRotation,
+        playerId,
+        videoUrl,
+        playerCreateStartMs);
   }
 
   @RestrictTo(RestrictTo.Scope.LIBRARY)

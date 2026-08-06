@@ -285,8 +285,26 @@ public final class VideoPlayerPlugin: NSObject, FlutterPlugin, AVFoundationVideo
     guard let url = URL(string: options.uri) else {
       throw PigeonError(code: "video_player", message: "Invalid URI", details: nil)
     }
+    // The cache loader intentionally only handles unauthenticated requests. Its cache key is the
+    // URL, so videos with headers must stay on AVURLAsset to avoid reusing bytes across auth state.
+    if headers.isEmpty,
+      !isHLS(url: url),
+      DuyoVideoPreloadCache.shared.playableCachedPrefix(
+        url: options.uri,
+        preloadBytes: DuyoVideoPreloadCache.defaultPreloadBytes) != nil,
+      let item = DuyoCachedVideoResourceLoader.playerItem(
+        for: url,
+        cacheKeyUrl: options.uri,
+        options: itemOptions)
+    {
+      return item
+    }
     let asset = avFactory.urlAsset(with: url, options: itemOptions)
     return avFactory.playerItem(with: asset)
+  }
+
+  private func isHLS(url: URL) -> Bool {
+    url.pathExtension.lowercased() == "m3u8"
   }
 
   private func handlePreloadMethod(
@@ -298,19 +316,22 @@ public final class VideoPlayerPlugin: NSObject, FlutterPlugin, AVFoundationVideo
     case "preload":
       DuyoVideoPreloadCache.shared.preload(
         url: arguments["url"] as? String,
-        title: arguments["title"] as? String
+        title: arguments["title"] as? String,
+        preloadBytes: preloadBytesArgument(arguments)
       )
       result(nil)
     case "syncQueue":
       DuyoVideoPreloadCache.shared.syncQueue(
         urls: arguments["urls"] as? [String] ?? [],
-        titlesByUrl: arguments["titlesByUrl"] as? [String: String] ?? [:]
+        titlesByUrl: arguments["titlesByUrl"] as? [String: String] ?? [:],
+        preloadBytes: preloadBytesArgument(arguments)
       )
       result(nil)
     case "prioritize":
       DuyoVideoPreloadCache.shared.prioritize(
         url: arguments["url"] as? String,
-        title: arguments["title"] as? String
+        title: arguments["title"] as? String,
+        preloadBytes: preloadBytesArgument(arguments)
       )
       result(nil)
     case "clearQueue":
@@ -320,11 +341,21 @@ public final class VideoPlayerPlugin: NSObject, FlutterPlugin, AVFoundationVideo
       DuyoVideoPreloadCache.shared.cancel(reason: arguments["reason"] as? String ?? "cancel")
       result(nil)
     case "cachedBytes":
-      let bytes = DuyoVideoPreloadCache.shared.cachedBytes(url: arguments["url"] as? String)
+      let bytes = DuyoVideoPreloadCache.shared.cachedBytes(
+        url: arguments["url"] as? String,
+        preloadBytes: preloadBytesArgument(arguments)
+      )
       result(min(bytes, Int64(Int32.max)))
     default:
       result(FlutterMethodNotImplemented)
     }
+  }
+
+  private func preloadBytesArgument(_ arguments: [String: Any]) -> Int64 {
+    guard let preloadBytes = arguments["preloadBytes"] as? NSNumber else {
+      return DuyoVideoPreloadCache.defaultPreloadBytes
+    }
+    return preloadBytes.int64Value
   }
 }
 

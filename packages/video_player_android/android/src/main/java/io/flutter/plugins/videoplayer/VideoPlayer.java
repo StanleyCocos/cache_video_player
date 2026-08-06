@@ -68,17 +68,36 @@ public abstract class VideoPlayer implements VideoPlayerInstanceApi {
       @NonNull ExoPlayerProvider exoPlayerProvider) {
     this.videoPlayerEvents = events;
     this.surfaceProducer = surfaceProducer;
-    exoPlayer = exoPlayerProvider.get();
+    final String videoUrl =
+        mediaItem.localConfiguration == null
+            ? ""
+            : mediaItem.localConfiguration.uri.toString();
+    final long playerCreateStartMs = VideoPreloadCache.nowMs();
+    VideoPreloadCache.rememberPlayerStart(playerId, playerCreateStartMs);
+    try {
+      VideoPreloadCache.logPlayerTimeline(playerId, videoUrl, playerCreateStartMs, "创建开始");
+      exoPlayer = exoPlayerProvider.get();
+      VideoPreloadCache.logPlayerTimeline(playerId, videoUrl, playerCreateStartMs, "创建结束");
 
-    // Try to get the track selector from the ExoPlayer if it was built with one
-    if (exoPlayer.getTrackSelector() instanceof DefaultTrackSelector) {
-      trackSelector = (DefaultTrackSelector) exoPlayer.getTrackSelector();
+      // Try to get the track selector from the ExoPlayer if it was built with one
+      if (exoPlayer.getTrackSelector() instanceof DefaultTrackSelector) {
+        trackSelector = (DefaultTrackSelector) exoPlayer.getTrackSelector();
+      }
+
+      VideoPreloadCache.logPlayerTimeline(playerId, videoUrl, playerCreateStartMs, "setMediaItem 开始");
+      exoPlayer.setMediaItem(mediaItem);
+      VideoPreloadCache.logPlayerTimeline(playerId, videoUrl, playerCreateStartMs, "setMediaItem 结束");
+      exoPlayer.addListener(
+          createExoPlayerEventListener(
+              exoPlayer, surfaceProducer, playerId, videoUrl, playerCreateStartMs));
+      VideoPreloadCache.logPlayerTimeline(playerId, videoUrl, playerCreateStartMs, "addListener 结束");
+      VideoPreloadCache.logPlayerTimeline(playerId, videoUrl, playerCreateStartMs, "prepare 开始");
+      exoPlayer.prepare();
+      setAudioAttributes(exoPlayer, options.mixWithOthers);
+    } catch (RuntimeException | Error error) {
+      VideoPreloadCache.forgetPlayerStart(playerId);
+      throw error;
     }
-
-    exoPlayer.setMediaItem(mediaItem);
-    exoPlayer.prepare();
-    exoPlayer.addListener(createExoPlayerEventListener(exoPlayer, surfaceProducer));
-    setAudioAttributes(exoPlayer, options.mixWithOthers);
   }
 
   public void setDisposeHandler(@Nullable DisposeHandler handler) {
@@ -87,7 +106,11 @@ public abstract class VideoPlayer implements VideoPlayerInstanceApi {
 
   @NonNull
   protected abstract ExoPlayerEventListener createExoPlayerEventListener(
-      @NonNull ExoPlayer exoPlayer, @Nullable SurfaceProducer surfaceProducer);
+      @NonNull ExoPlayer exoPlayer,
+      @Nullable SurfaceProducer surfaceProducer,
+      long playerId,
+      @NonNull String videoUrl,
+      long playerCreateStartMs);
 
   private static void setAudioAttributes(ExoPlayer exoPlayer, boolean isMixMode) {
     exoPlayer.setAudioAttributes(

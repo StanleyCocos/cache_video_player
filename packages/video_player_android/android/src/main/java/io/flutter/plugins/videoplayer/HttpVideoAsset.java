@@ -76,7 +76,7 @@ final class HttpVideoAsset extends VideoAsset {
       Context context, DefaultHttpDataSource.Factory initialFactory, long playerId) {
     unstableUpdateDataSourceFactory(initialFactory, httpHeaders, userAgent);
     DataSource.Factory dataSourceFactory =
-        VideoPreloadCache.buildFactory(context, initialFactory, playerId);
+        VideoPreloadCache.buildFactory(context, initialFactory, playerId, assetUrl, true);
     return new DefaultMediaSourceFactory(context).setDataSourceFactory(dataSourceFactory);
   }
 

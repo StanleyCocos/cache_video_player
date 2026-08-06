@@ -9,6 +9,8 @@ import static org.mockito.Mockito.*;
 
 import android.content.Context;
 import android.util.LongSparseArray;
+import androidx.media3.common.MediaItem;
+import androidx.media3.exoplayer.ExoPlayer;
 import io.flutter.embedding.engine.plugins.FlutterPlugin;
 import io.flutter.plugin.platform.PlatformViewRegistry;
 import io.flutter.plugins.videoplayer.platformview.PlatformVideoViewFactory;
@@ -17,6 +19,7 @@ import io.flutter.plugins.videoplayer.texture.TextureVideoPlayer;
 import io.flutter.view.TextureRegistry;
 import java.lang.reflect.Field;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -53,6 +56,13 @@ public class VideoPlayerPluginTest {
     final Field field = VideoPlayerPlugin.class.getDeclaredField("videoPlayers");
     field.setAccessible(true);
     return (LongSparseArray<VideoPlayer>) field.get(plugin);
+  }
+
+  @SuppressWarnings("unchecked")
+  private LinkedHashMap<Long, Long> getPlayerStartMsById() throws Exception {
+    final Field field = VideoPreloadCache.class.getDeclaredField("playerStartMsById");
+    field.setAccessible(true);
+    return (LinkedHashMap<Long, Long>) field.get(null);
   }
 
   // This is only a placeholder test and doesn't actually initialize the plugin.
@@ -110,5 +120,49 @@ public class VideoPlayerPluginTest {
       final LongSparseArray<VideoPlayer> videoPlayers = getVideoPlayers();
       assertTrue(videoPlayers.get(ids.getPlayerId()) instanceof TextureVideoPlayer);
     }
+  }
+
+  @Test
+  public void disposeClearsRememberedPlayerStart() throws Exception {
+    long playerId = 42L;
+    VideoPlayer videoPlayer = mock(VideoPlayer.class);
+    getVideoPlayers().put(playerId, videoPlayer);
+    getPlayerStartMsById().clear();
+    VideoPreloadCache.rememberPlayerStart(playerId, 123L);
+
+    plugin.dispose(playerId);
+
+    assertFalse(getPlayerStartMsById().containsKey(playerId));
+  }
+
+  @Test
+  public void constructorFailureClearsRememberedPlayerStart() throws Exception {
+    long playerId = 43L;
+    getPlayerStartMsById().clear();
+
+    assertThrows(
+        RuntimeException.class,
+        () ->
+            new VideoPlayer(
+                mock(VideoPlayerCallbacks.class),
+                MediaItem.fromUri("https://example.com/video.mp4"),
+                new VideoPlayerOptions(),
+                playerId,
+                null,
+                () -> {
+                  throw new RuntimeException("boom");
+                }) {
+              @Override
+              protected ExoPlayerEventListener createExoPlayerEventListener(
+                  ExoPlayer exoPlayer,
+                  TextureRegistry.SurfaceProducer surfaceProducer,
+                  long playerId,
+                  String videoUrl,
+                  long playerCreateStartMs) {
+                throw new AssertionError("not reached");
+              }
+            });
+
+    assertFalse(getPlayerStartMsById().containsKey(playerId));
   }
 }

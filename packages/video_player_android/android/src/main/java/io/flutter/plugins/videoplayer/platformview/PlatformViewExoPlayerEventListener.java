@@ -15,8 +15,12 @@ import java.util.Objects;
 
 public final class PlatformViewExoPlayerEventListener extends ExoPlayerEventListener {
   public PlatformViewExoPlayerEventListener(
-      @NonNull ExoPlayer exoPlayer, @NonNull VideoPlayerCallbacks events) {
-    super(exoPlayer, events);
+      @NonNull ExoPlayer exoPlayer,
+      @NonNull VideoPlayerCallbacks events,
+      long playerId,
+      @NonNull String videoUrl,
+      long playerCreateStartMs) {
+    super(exoPlayer, events, playerId, videoUrl, playerCreateStartMs);
   }
 
   @OptIn(markerClass = UnstableApi.class)

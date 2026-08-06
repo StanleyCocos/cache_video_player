@@ -191,6 +191,7 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
     VideoPlayer player = getPlayer(playerId);
     player.dispose();
     videoPlayers.remove(playerId);
+    VideoPreloadCache.forgetPlayerStart(playerId);
   }
 
   @Override
@@ -216,6 +217,7 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
             flutterState.applicationContext,
             call.argument("url"),
             call.argument("title"),
+            preloadBytesArgument(call),
             Collections.emptyMap(),
             null);
         result.success(null);
@@ -227,6 +229,7 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
             flutterState.applicationContext,
             urls == null ? Collections.emptyList() : urls,
             titlesByUrl == null ? Collections.emptyMap() : titlesByUrl,
+            preloadBytesArgument(call),
             Collections.emptyMap(),
             null);
         result.success(null);
@@ -236,6 +239,7 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
             flutterState.applicationContext,
             call.argument("url"),
             call.argument("title"),
+            preloadBytesArgument(call),
             Collections.emptyMap(),
             null);
         result.success(null);
@@ -251,13 +255,22 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
         result.success(null);
         break;
       case "cachedBytes":
-        long bytes = VideoPreloadCache.cachedBytes(flutterState.applicationContext, call.argument("url"));
+        long bytes =
+            VideoPreloadCache.cachedBytes(
+                flutterState.applicationContext,
+                call.argument("url"),
+                preloadBytesArgument(call));
         result.success(bytes > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) bytes);
         break;
       default:
         result.notImplemented();
         break;
     }
+  }
+
+  private static long preloadBytesArgument(@NonNull MethodCall call) {
+    Number preloadBytes = call.argument("preloadBytes");
+    return preloadBytes == null ? VideoPreloadCache.DEFAULT_PRELOAD_BYTES : preloadBytes.longValue();
   }
 
   private interface KeyForAssetFn {

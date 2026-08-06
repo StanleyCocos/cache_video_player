@@ -72,7 +72,12 @@ public class PlatformViewVideoPlayer extends VideoPlayer {
   @NonNull
   @Override
   protected ExoPlayerEventListener createExoPlayerEventListener(
-      @NonNull ExoPlayer exoPlayer, @Nullable SurfaceProducer surfaceProducer) {
-    return new PlatformViewExoPlayerEventListener(exoPlayer, videoPlayerEvents);
+      @NonNull ExoPlayer exoPlayer,
+      @Nullable SurfaceProducer surfaceProducer,
+      long playerId,
+      @NonNull String videoUrl,
+      long playerCreateStartMs) {
+    return new PlatformViewExoPlayerEventListener(
+        exoPlayer, videoPlayerEvents, playerId, videoUrl, playerCreateStartMs);
   }
 }

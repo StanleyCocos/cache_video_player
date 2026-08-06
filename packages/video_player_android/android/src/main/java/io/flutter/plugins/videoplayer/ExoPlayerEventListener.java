@@ -16,6 +16,9 @@ public abstract class ExoPlayerEventListener implements Player.Listener {
   private boolean isInitialized = false;
   protected final ExoPlayer exoPlayer;
   protected final VideoPlayerCallbacks events;
+  private final long playerId;
+  @NonNull private final String videoUrl;
+  private final long playerCreateStartMs;
 
   protected enum RotationDegrees {
     ROTATE_0(0),
@@ -44,9 +47,16 @@ public abstract class ExoPlayerEventListener implements Player.Listener {
   }
 
   public ExoPlayerEventListener(
-      @NonNull ExoPlayer exoPlayer, @NonNull VideoPlayerCallbacks events) {
+      @NonNull ExoPlayer exoPlayer,
+      @NonNull VideoPlayerCallbacks events,
+      long playerId,
+      @NonNull String videoUrl,
+      long playerCreateStartMs) {
     this.exoPlayer = exoPlayer;
     this.events = events;
+    this.playerId = playerId;
+    this.videoUrl = videoUrl;
+    this.playerCreateStartMs = playerCreateStartMs;
   }
 
   protected abstract void sendInitialized();
@@ -57,19 +67,29 @@ public abstract class ExoPlayerEventListener implements Player.Listener {
     switch (playbackState) {
       case Player.STATE_BUFFERING:
         platformState = PlatformPlaybackState.BUFFERING;
+        logTimeline("STATE_BUFFERING");
         break;
       case Player.STATE_READY:
         platformState = PlatformPlaybackState.READY;
+        logTimeline("STATE_READY");
         if (!isInitialized) {
           isInitialized = true;
+          long sendInitializedStartMs = VideoPreloadCache.nowMs();
+          logTimeline("sendInitialized 开始");
           sendInitialized();
+          logTimeline(
+              "sendInitialized 结束 cost="
+                  + (VideoPreloadCache.nowMs() - sendInitializedStartMs)
+                  + "ms");
         }
         break;
       case Player.STATE_ENDED:
         platformState = PlatformPlaybackState.ENDED;
+        logTimeline("STATE_ENDED");
         break;
       case Player.STATE_IDLE:
         platformState = PlatformPlaybackState.IDLE;
+        logTimeline("STATE_IDLE");
         break;
     }
     events.onPlaybackStateChanged(platformState);
@@ -89,7 +109,13 @@ public abstract class ExoPlayerEventListener implements Player.Listener {
 
   @Override
   public void onIsPlayingChanged(boolean isPlaying) {
+    logTimeline("onIsPlayingChanged " + isPlaying);
     events.onIsPlayingStateUpdate(isPlaying);
+  }
+
+  @Override
+  public void onRenderedFirstFrame() {
+    logTimeline("onRenderedFirstFrame");
   }
 
   @Override
@@ -120,5 +146,9 @@ public abstract class ExoPlayerEventListener implements Player.Listener {
       groupIndex++;
     }
     return null;
+  }
+
+  private void logTimeline(@NonNull String message) {
+    VideoPreloadCache.logPlayerTimeline(playerId, videoUrl, playerCreateStartMs, message);
   }
 }

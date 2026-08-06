@@ -64,6 +64,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy, nullable) AVVideoComposition *videoComposition;
 @end
 
+/// Allows Swift-created player items to be passed through the default AV factory.
+@protocol FVPAVPlayerItemWrapper <NSObject>
+@required
+/// The underlying AVFoundation player item.
+@property(nonatomic, readonly) AVPlayerItem *playerItem;
+@end
+
 #if TARGET_OS_IOS
 /// Protocol for abstracting access to an AVAudioSession, to enable unit testing.
 @protocol FVPAVAudioSession <NSObject>

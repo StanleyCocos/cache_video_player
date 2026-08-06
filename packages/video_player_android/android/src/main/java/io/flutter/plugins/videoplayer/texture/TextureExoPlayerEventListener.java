@@ -19,8 +19,11 @@ public final class TextureExoPlayerEventListener extends ExoPlayerEventListener 
   public TextureExoPlayerEventListener(
       @NonNull ExoPlayer exoPlayer,
       @NonNull VideoPlayerCallbacks events,
-      boolean surfaceProducerHandlesCropAndRotation) {
-    super(exoPlayer, events);
+      boolean surfaceProducerHandlesCropAndRotation,
+      long playerId,
+      @NonNull String videoUrl,
+      long playerCreateStartMs) {
+    super(exoPlayer, events, playerId, videoUrl, playerCreateStartMs);
     this.surfaceProducerHandlesCropAndRotation = surfaceProducerHandlesCropAndRotation;
   }
 
