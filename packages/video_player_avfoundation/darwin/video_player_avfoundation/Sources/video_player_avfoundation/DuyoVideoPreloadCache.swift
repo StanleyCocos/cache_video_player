@@ -27,6 +27,7 @@ final class DuyoVideoPreloadCache: NSObject, URLSessionDataDelegate {
   private var activeDataByUrl: [String: Data] = [:]
   private var activeResponseByUrl: [String: URLResponse] = [:]
   private var titlesByUrl: [String: String] = [:]
+  private var debugLogEnabled = false
   private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
 
   private override init() {
@@ -54,10 +55,14 @@ final class DuyoVideoPreloadCache: NSObject, URLSessionDataDelegate {
   ) {
     let visibleUrls = sanitize(urls)
     let requestedPreloadBytes = normalizePreloadBytes(preloadBytes)
+    logSyncQueueReceived(sourceCount: urls.count, sanitizedCount: visibleUrls.count)
     lockQueue.async {
       self.rememberTitles(titlesByUrl: incomingTitlesByUrl)
       self.queuedUrls.removeAll()
       self.queuedPreloadBytesByUrl.removeAll()
+      if visibleUrls.isEmpty {
+        self.logQueueSkipped(reason: "队列为空")
+      }
       for activeUrl in Array(self.activeTasks.keys) {
         if !visibleUrls.contains(activeUrl) {
           self.cancelActive(url: activeUrl, reason: "离屏")
@@ -69,9 +74,11 @@ final class DuyoVideoPreloadCache: NSObject, URLSessionDataDelegate {
         let cachedBytes = self.cachedBytesLocked(
           url: visibleUrl, preloadBytes: requestedPreloadBytes)
         if cachedBytes >= requestedPreloadBytes {
+          self.logQueueSkipped(url: visibleUrl, reason: "已缓存 bytes=\(cachedBytes)")
           continue
         }
         if self.activeTasks[visibleUrl] != nil || self.queuedUrls.contains(visibleUrl) {
+          self.logQueueSkipped(url: visibleUrl, reason: "已在队列或下载中")
           continue
         }
         self.queuedUrls.append(visibleUrl)
@@ -115,6 +122,13 @@ final class DuyoVideoPreloadCache: NSObject, URLSessionDataDelegate {
       for activeUrl in Array(self.activeTasks.keys) {
         self.cancelActive(url: activeUrl, reason: reason)
       }
+    }
+  }
+
+  /// 设置视频缓存日志开关。
+  func setDebugLogEnabled(_ enabled: Bool) {
+    lockQueue.async {
+      self.debugLogEnabled = enabled
     }
   }
 
@@ -198,6 +212,13 @@ final class DuyoVideoPreloadCache: NSObject, URLSessionDataDelegate {
   func title(url: String) -> String {
     lockQueue.sync {
       titleLocked(url: url)
+    }
+  }
+
+  /// 判断当前是否允许输出视频缓存日志。
+  func isDebugLogEnabled() -> Bool {
+    lockQueue.sync {
+      debugLogEnabled
     }
   }
 
@@ -502,22 +523,46 @@ final class DuyoVideoPreloadCache: NSObject, URLSessionDataDelegate {
     return value.isEmpty ? "未命名贴文" : value
   }
 
+  private func logSyncQueueReceived(sourceCount: Int, sanitizedCount: Int) {
+    guard isDebugLogEnabled() else {
+      return
+    }
+    print("[VideoLoad] syncQueue received source=\(sourceCount) sanitized=\(sanitizedCount)")
+  }
+
+  private func logQueueSkipped(reason: String) {
+    guard debugLogEnabled else {
+      return
+    }
+    print("[VideoLoad] 跳过预缓存 reason=\(reason)")
+  }
+
+  private func logQueueSkipped(url: String, reason: String) {
+    guard debugLogEnabled else {
+      return
+    }
+    print("[VideoLoad] 《\(titleLocked(url: url))》跳过预缓存 reason=\(reason)")
+  }
+
   private func logPreloadStarted(url: String) {
-    #if DEBUG
-      print("[VideoLoad] 列表《\(titleLocked(url: url))》开始缓存")
-    #endif
+    guard debugLogEnabled else {
+      return
+    }
+    print("[VideoLoad] 列表《\(titleLocked(url: url))》开始缓存")
   }
 
   private func logPreloadFinished(url: String, bytes: Int64, costMs: Int64) {
-    #if DEBUG
-      print("[VideoLoad] 缓存《\(titleLocked(url: url))》已经完成 bytes=\(bytes) cost=\(costMs)ms")
-    #endif
+    guard debugLogEnabled else {
+      return
+    }
+    print("[VideoLoad] 缓存《\(titleLocked(url: url))》已经完成 bytes=\(bytes) cost=\(costMs)ms")
   }
 
   private func logPreloadFailed(url: String, reason: String) {
-    #if DEBUG
-      print("[VideoLoad] 缓存《\(titleLocked(url: url))》失败 reason=\(reason)")
-    #endif
+    guard debugLogEnabled else {
+      return
+    }
+    print("[VideoLoad] 缓存《\(titleLocked(url: url))》失败 reason=\(reason)")
   }
 
   private func trimRememberedTitles() {
@@ -541,10 +586,11 @@ final class DuyoVideoPreloadCache: NSObject, URLSessionDataDelegate {
   }
 
   private func logCacheState(url: String, bytes: Int64) {
-    #if DEBUG
-      let state = bytes > 0 ? "有缓存" : "没有缓存"
-      print("[VideoLoad] 《\(titleLocked(url: url))》\(state) bytes=\(bytes)")
-    #endif
+    guard debugLogEnabled else {
+      return
+    }
+    let state = bytes > 0 ? "有缓存" : "没有缓存"
+    print("[VideoLoad] 《\(titleLocked(url: url))》\(state) bytes=\(bytes)")
   }
 
   private func cacheFiles() -> [CacheFile] {

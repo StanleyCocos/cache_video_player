@@ -222,7 +222,8 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
             preloadBytesArgument(call),
             httpHeadersArgument(call),
             call.argument("userAgent"),
-            streamingFormatArgument(call));
+            streamingFormatArgument(call),
+            debugLogEnabledArgument(call));
         result.success(null);
         break;
       case "syncQueue":
@@ -235,7 +236,8 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
             preloadBytesArgument(call),
             httpHeadersArgument(call),
             call.argument("userAgent"),
-            streamingFormatArgument(call));
+            streamingFormatArgument(call),
+            debugLogEnabledArgument(call));
         result.success(null);
         break;
       case "prioritize":
@@ -246,20 +248,24 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
             preloadBytesArgument(call),
             httpHeadersArgument(call),
             call.argument("userAgent"),
-            streamingFormatArgument(call));
+            streamingFormatArgument(call),
+            debugLogEnabledArgument(call));
         result.success(null);
         break;
       case "clearQueue":
+        VideoPreloadCache.setDebugLogEnabled(debugLogEnabledArgument(call));
         String clearReason = call.argument("reason");
         VideoPreloadCache.clear(clearReason == null ? "clear" : clearReason);
         result.success(null);
         break;
       case "cancelPreload":
+        VideoPreloadCache.setDebugLogEnabled(debugLogEnabledArgument(call));
         String reason = call.argument("reason");
         VideoPreloadCache.cancel(reason == null ? "cancel" : reason);
         result.success(null);
         break;
       case "cachedBytes":
+        VideoPreloadCache.setDebugLogEnabled(debugLogEnabledArgument(call));
         long bytes =
             VideoPreloadCache.cachedBytes(
                 flutterState.applicationContext,
@@ -276,6 +282,11 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
   private static long preloadBytesArgument(@NonNull MethodCall call) {
     Number preloadBytes = call.argument("preloadBytes");
     return preloadBytes == null ? VideoPreloadCache.DEFAULT_PRELOAD_BYTES : preloadBytes.longValue();
+  }
+
+  private static boolean debugLogEnabledArgument(@NonNull MethodCall call) {
+    Boolean enabled = call.argument("debugLogEnabled");
+    return enabled != null && enabled;
   }
 
   @NonNull

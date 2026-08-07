@@ -312,6 +312,7 @@ public final class VideoPlayerPlugin: NSObject, FlutterPlugin, AVFoundationVideo
     result: @escaping FlutterResult
   ) {
     let arguments = call.arguments as? [String: Any] ?? [:]
+    DuyoVideoPreloadCache.shared.setDebugLogEnabled(debugLogEnabledArgument(arguments))
     switch call.method {
     case "preload":
       DuyoVideoPreloadCache.shared.preload(
@@ -356,6 +357,10 @@ public final class VideoPlayerPlugin: NSObject, FlutterPlugin, AVFoundationVideo
       return DuyoVideoPreloadCache.defaultPreloadBytes
     }
     return preloadBytes.int64Value
+  }
+
+  private func debugLogEnabledArgument(_ arguments: [String: Any]) -> Bool {
+    arguments["debugLogEnabled"] as? Bool ?? false
   }
 }
 

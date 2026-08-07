@@ -302,21 +302,20 @@ final class DuyoCachedVideoResourceLoader: NSObject, AVAssetResourceLoaderDelega
   }
 
   private func logPlayerCacheRead(url: String, bytes: Int) {
-    #if DEBUG
-      guard bytes > 0, !loggedCacheReadUrls.contains(url) else {
-        return
-      }
-      loggedCacheReadUrls.insert(url)
-      print("[VideoLoad] 《\(cache.title(url: url))》播放器读取了缓存 bytes=\(bytes)")
-    #endif
+    guard cache.isDebugLogEnabled(), bytes > 0, !loggedCacheReadUrls.contains(url) else {
+      return
+    }
+    loggedCacheReadUrls.insert(url)
+    print("[VideoLoad] 《\(cache.title(url: url))》播放器读取了缓存 bytes=\(bytes)")
   }
 
   private func logPlayerNetworkFailed(load: StreamingLoad, error: Error) {
-    #if DEBUG
-      print(
-        "[VideoLoad] 《\(cache.title(url: cacheKeyUrl))》播放器网络补齐失败 offset=\(load.offset) length=\(load.length) error=\(error.localizedDescription)"
-      )
-    #endif
+    guard cache.isDebugLogEnabled() else {
+      return
+    }
+    print(
+      "[VideoLoad] 《\(cache.title(url: cacheKeyUrl))》播放器网络补齐失败 offset=\(load.offset) length=\(load.length) error=\(error.localizedDescription)"
+    )
   }
 }
 

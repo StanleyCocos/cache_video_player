@@ -1,7 +1,6 @@
 package io.flutter.plugins.videoplayer;
 
 import android.content.Context;
-import android.content.pm.ApplicationInfo;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
@@ -92,7 +91,6 @@ public final class VideoPreloadCache {
       long playerId,
       @Nullable String url,
       boolean logPlayerCacheRead) {
-    updateDebugEnabled(context);
     boolean shouldLogPlayerCacheRead = debugEnabled && logPlayerCacheRead && url != null;
     SimpleCache simpleCache = getCache(context);
     DataSource.Factory upstreamFactory = new DefaultDataSource.Factory(context, httpFactory);
@@ -131,7 +129,9 @@ public final class VideoPreloadCache {
       long preloadBytes,
       @NonNull Map<String, String> httpHeaders,
       @Nullable String userAgent,
-      @NonNull VideoAsset.StreamingFormat streamingFormat) {
+      @NonNull VideoAsset.StreamingFormat streamingFormat,
+      boolean debugLogEnabled) {
+    setDebugLogEnabled(debugLogEnabled);
     String videoUrl = url == null ? "" : url.trim();
     if (videoUrl.isEmpty()) {
       return;
@@ -140,7 +140,15 @@ public final class VideoPreloadCache {
     urls.add(videoUrl);
     LinkedHashMap<String, String> titles = new LinkedHashMap<>();
     titles.put(videoUrl, title == null ? "" : title);
-    syncQueue(context, urls, titles, preloadBytes, httpHeaders, userAgent, streamingFormat);
+    syncQueue(
+        context,
+        urls,
+        titles,
+        preloadBytes,
+        httpHeaders,
+        userAgent,
+        streamingFormat,
+        debugLogEnabled);
   }
 
   /** 同步当前可见视频预加载队列。 */
@@ -151,10 +159,11 @@ public final class VideoPreloadCache {
       long preloadBytes,
       @NonNull Map<String, String> httpHeaders,
       @Nullable String userAgent,
-      @NonNull VideoAsset.StreamingFormat streamingFormat) {
+      @NonNull VideoAsset.StreamingFormat streamingFormat,
+      boolean debugLogEnabled) {
+    setDebugLogEnabled(debugLogEnabled);
     LinkedHashSet<String> visibleUrls = sanitizeUrls(urls);
     long requestedPreloadBytes = normalizePreloadBytes(preloadBytes);
-    updateDebugEnabled(context);
     synchronized (LOCK) {
       rememberTitlesLocked(incomingTitlesByUrl);
       setWarmCandidatesLocked(visibleUrls, httpHeaders, userAgent, streamingFormat);
@@ -196,13 +205,14 @@ public final class VideoPreloadCache {
       long preloadBytes,
       @NonNull Map<String, String> httpHeaders,
       @Nullable String userAgent,
-      @NonNull VideoAsset.StreamingFormat streamingFormat) {
+      @NonNull VideoAsset.StreamingFormat streamingFormat,
+      boolean debugLogEnabled) {
+    setDebugLogEnabled(debugLogEnabled);
     String videoUrl = url == null ? "" : url.trim();
     if (videoUrl.isEmpty()) {
       return;
     }
     long requestedPreloadBytes = normalizePreloadBytes(preloadBytes);
-    updateDebugEnabled(context);
     synchronized (LOCK) {
       rememberTitleLocked(videoUrl, title);
       long cachedBytes = cachedBytes(context, videoUrl, requestedPreloadBytes);
@@ -244,6 +254,11 @@ public final class VideoPreloadCache {
     synchronized (LOCK) {
       clearWarmCandidatesLocked(reason);
     }
+  }
+
+  /** 设置视频缓存和预热日志开关。 */
+  static void setDebugLogEnabled(boolean enabled) {
+    debugEnabled = enabled;
   }
 
   /** 查询首段缓存字节数。 */
@@ -600,7 +615,7 @@ public final class VideoPreloadCache {
 
             @Override
             public void onPlayerError(@NonNull PlaybackException error) {
-              Log.w(TAG, "warm error url=" + warmPlayer.request.url, error);
+              logWarmWarning("warm error url=" + warmPlayer.request.url, error);
               releaseWarmPlayer(warmPlayer.request.url, "warm error");
             }
           };
@@ -618,7 +633,7 @@ public final class VideoPreloadCache {
       if (player != null) {
         player.release();
       }
-      Log.w(TAG, "warm failed url=" + warmPlayer.request.url, error);
+      logWarmWarning("warm failed url=" + warmPlayer.request.url, error);
       releaseWarmPlayer(warmPlayer.request.url, "warm failed");
     }
   }
@@ -753,10 +768,6 @@ public final class VideoPreloadCache {
     }
   }
 
-  private static void updateDebugEnabled(@NonNull Context context) {
-    debugEnabled = (context.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
-  }
-
   private static void rememberTitleLocked(@Nullable String url, @Nullable String title) {
     String videoUrl = url == null ? "" : url.trim();
     if (videoUrl.isEmpty()) {
@@ -883,6 +894,13 @@ public final class VideoPreloadCache {
               + "》warm 接管状态不一致 state="
               + playbackState);
     }
+  }
+
+  private static void logWarmWarning(@NonNull String message, @NonNull Throwable error) {
+    if (!debugEnabled) {
+      return;
+    }
+    Log.w(TAG, message, error);
   }
 
   public static long nowMs() {
