@@ -13,16 +13,12 @@ final class DuyoCachedVideoResourceLoader: NSObject, AVAssetResourceLoaderDelega
 {
   private static let httpScheme = "duyo-video-cache-http"
   private static let httpsScheme = "duyo-video-cache-https"
-
   private let cache = DuyoVideoPreloadCache.shared
   private let cacheKeyUrl: String
   private var loads: [ObjectIdentifier: StreamingLoad] = [:]
   private var loadsByTaskIdentifier: [Int: StreamingLoad] = [:]
   private var loggedCacheReadUrls = Set<String>()
-  private lazy var session = URLSession(
-    configuration: .default,
-    delegate: self,
-    delegateQueue: .main)
+  private var session: URLSession?
 
   init(cacheKeyUrl: String) {
     self.cacheKeyUrl = cacheKeyUrl
@@ -30,10 +26,8 @@ final class DuyoCachedVideoResourceLoader: NSObject, AVAssetResourceLoaderDelega
   }
 
   deinit {
-    for load in loads.values {
-      load.cancel()
-    }
-    session.invalidateAndCancel()
+    cancelActiveLoads()
+    session?.invalidateAndCancel()
   }
 
   static func playerItem(
@@ -52,7 +46,9 @@ final class DuyoCachedVideoResourceLoader: NSObject, AVAssetResourceLoaderDelega
     let loader = DuyoCachedVideoResourceLoader(cacheKeyUrl: cacheKeyUrl)
     let asset = AVURLAsset(url: assetUrl, options: options)
     asset.resourceLoader.setDelegate(loader, queue: .main)
-    return DuyoCachedAVPlayerItem(playerItem: AVPlayerItem(asset: asset), loader: loader)
+    let realPlayerItem = AVPlayerItem(asset: asset)
+    let item = DuyoCachedAVPlayerItem(playerItem: realPlayerItem, loader: loader)
+    return item
   }
 
   func resourceLoader(
@@ -94,7 +90,7 @@ final class DuyoCachedVideoResourceLoader: NSObject, AVAssetResourceLoaderDelega
       length: requestedLength - loadedLength
     )
     loads[key] = load
-    let task = load.start(session: session)
+    let task = load.start(session: activeSession())
     loadsByTaskIdentifier[task.taskIdentifier] = load
     return true
   }
@@ -172,6 +168,32 @@ final class DuyoCachedVideoResourceLoader: NSObject, AVAssetResourceLoaderDelega
         }
       }
     }
+  }
+
+  func prepareForDispose() {
+    cancelActiveLoads()
+    session?.invalidateAndCancel()
+    session = nil
+  }
+
+  private func activeSession() -> URLSession {
+    if let session {
+      return session
+    }
+    let createdSession = URLSession(
+      configuration: .default,
+      delegate: self,
+      delegateQueue: .main)
+    session = createdSession
+    return createdSession
+  }
+
+  private func cancelActiveLoads() {
+    for load in loads.values {
+      load.cancel()
+    }
+    loads.removeAll()
+    loadsByTaskIdentifier.removeAll()
   }
 
   private static func cachedAssetUrl(for url: URL) -> URL? {
@@ -410,6 +432,7 @@ private final class DuyoCachedAVAsset: NSObject, FVPAVAsset {
   func tracks(withMediaType mediaType: AVMediaType) -> [AVAssetTrack] {
     asset.tracks(withMediaType: mediaType)
   }
+
 }
 
 private final class DuyoCachedAVPlayerItem: NSObject, FVPAVPlayerItem, FVPAVPlayerItemWrapper {
@@ -436,4 +459,12 @@ private final class DuyoCachedAVPlayerItem: NSObject, FVPAVPlayerItem, FVPAVPlay
       playerItem.videoComposition = newValue
     }
   }
+
+  func prepareForDispose() {
+    if let asset = playerItem.asset as? AVURLAsset {
+      asset.resourceLoader.setDelegate(nil, queue: nil)
+    }
+    loader.prepareForDispose()
+  }
+
 }

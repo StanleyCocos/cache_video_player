@@ -69,6 +69,9 @@ NS_ASSUME_NONNULL_BEGIN
 @required
 /// The underlying AVFoundation player item.
 @property(nonatomic, readonly) AVPlayerItem *playerItem;
+@optional
+/// Allows wrappers to detach delegates and cancel native loading before disposal.
+- (void)prepareForDispose;
 @end
 
 #if TARGET_OS_IOS

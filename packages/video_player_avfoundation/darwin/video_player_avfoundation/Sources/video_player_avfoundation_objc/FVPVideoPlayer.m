@@ -76,6 +76,8 @@ static NSDictionary<NSString *, NSValue *> *FVPGetPlayerItemObservations(void) {
 @implementation FVPVideoPlayer {
   // Whether or not player and player item listeners have ever been registered.
   BOOL _listenersRegistered;
+  // Retains Swift player item wrappers so their resource loader outlives AVPlayer setup and KVO.
+  NSObject<FVPAVPlayerItem> *_retainedPlayerItem;
 }
 
 - (instancetype)initWithPlayerItem:(NSObject<FVPAVPlayerItem> *)item
@@ -85,6 +87,7 @@ static NSDictionary<NSString *, NSValue *> *FVPGetPlayerItemObservations(void) {
   NSAssert(self, @"super init cannot be nil");
 
   _viewProvider = viewProvider;
+  _retainedPlayerItem = item;
 
   NSObject<FVPAVAsset> *asset = item.asset;
   void (^assetCompletionHandler)(void) = ^{
@@ -183,7 +186,16 @@ static NSDictionary<NSString *, NSValue *> *FVPGetPlayerItemObservations(void) {
     FVPRemoveKeyValueObservers(self, FVPGetPlayerObservations(), self.player);
   }
 
+  NSObject<FVPAVPlayerItem> *retainedPlayerItem = _retainedPlayerItem;
+  if ([retainedPlayerItem conformsToProtocol:@protocol(FVPAVPlayerItemWrapper)] &&
+      [retainedPlayerItem respondsToSelector:@selector(prepareForDispose)]) {
+    [(NSObject<FVPAVPlayerItemWrapper> *)retainedPlayerItem prepareForDispose];
+  }
+
   [self.player replaceCurrentItemWithPlayerItem:nil];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    self->_retainedPlayerItem = nil;
+  });
 
   if (_onDisposed) {
     _onDisposed();
